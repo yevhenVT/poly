@@ -1,0 +1,36 @@
+			Usage: Simulation of network dynamics requires the following parameters to be specified:
+			  -o <output directory>
+			  -n <directory with network>
+			  -f <prefix of output filenames>
+			  -nt <number of simulation trials>
+			  -d <duration of a single simulation trial>
+			  -s <time spread of training neurons>
+			 
+			  Synaptic strenghts of connections between neurons can be resampled by provided one of the following parameters:
+			  --resamle to resample connections between HVC-RA neurons
+			  --resample-all to resample connections between HVC-RA neurons and between HVC-RA and HVC-I
+			  
+			  When --resample is specified, the following parameter is required:
+			  -gee <new max synaptic strength for HVC-RA -> HVC-RA connections>
+			
+			  When --resample-all is specified, the following parameters are required:
+			  -gee <new max synaptic strength for HVC-RA -> HVC-RA connections>
+			  -gei <new max synaptic strength for HVC-RA -> HVC-I connections>
+			  -gie <new max synaptic strength for HVC-I  -> HVC-RA connections>
+			  
+			  User can provide a seed for random number generators:
+			  -seed <non-negative number>
+			  
+			  Membrane potentials of 100 random HVC-RA neurons will be recorded if the following parameter is specified:
+			  --record
+			  
+			  To see the usage message type --help
+
+Simulate a single trial of 800 ms of network dynamics with no spread among starter neurons
+mpirun -np 20 ./testNetwork -n <networkDir> -o <outDir> -f testTrial_ -nt 1 -d 800.0 -s 0.0
+
+Simulate a single trial of 800 ms of network dynamics with no spread among starter neurons. Resample connection strength between HVC-RA
+mpirun -np 20 ./testNetwork -n <networkDir> -o <outDir> -f testTrial_ -nt 1 -d 800.0 -s 0.0 -gee 0.01 --resample
+
+Simulate a single trial of 800 ms of network dynamics with no spread among starter neurons. Resample all connection strengths (makes sense only for network with interneurons)
+mpirun -np 20 ./testNetwork -n <networkDir> -o <outDir> -f testTrial_ -nt 1 -d 800.0 -s 0.0 -gee 0.01 -gei 0.20 -gie 0.03 --resample-all

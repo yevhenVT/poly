@@ -1,0 +1,47 @@
+			   Usage: 2 different types of network can be wired by specifying one of the options below:
+			   --synfire to wire one or more synfire chains
+			   --polychronous to wire a polychronous network
+			  
+			   Common parameters that have to specified for all networks:
+			   -o <output directory>
+			   -nra <# of HVC-RA neurons>
+			   -nout <# of output connections to other HVC-RA for each HVC-RA>
+			   -gee <max synaptic strength for HVC-RA -> HVC-RA connections>
+		       -md <mean value for axonal conduction delay>
+			   -sd <standard deviation of axonal conduction delays>
+			  
+			   User can also define an interneuron population:
+			   -ni <# of HVC-I neurons>
+			   -gei <max synaptic strength for HVC-RA -> HVC-I connections>
+			   -gie <max synaptic strength for HVC-I -> HVC-I connections>
+			   -pei <probability to contact an HVC-I neuron for HVC-RA neuron>
+			   -pie <probability to contact an HVC-RA neuron for interneuron>
+			  
+			   User can provide a seed for random number generators:
+			   -seed <non-negative number>
+			  
+			   In polychronous networks inputs have to arrive synchronously in a small time window.
+			   User can define the time window size and maximal number of input connections each neuron receives
+			   Parameters that have to specified for polychronous networks:
+			   -sm <window size for synchronously arriving inputs>
+			   -maxnin <maximal number of input connections per HVC-RA neuron>
+			  
+			   Parameters that have to specified for synfire chain networks:
+			   -npsc <number of parallel synfire chains>
+			  
+			   To see the usage message, type --help
+
+wire a single synfire chain with no interneurons and no delays
+mpirun -np 1 ./createNetwork -o <dirname> -nra 20000 -nout 170 -gee 0.004 -npsc 1 -md 0.0 -sd 0.0 --synfire
+
+wire three synfire chains with no interneurons and no delays
+mpirun -np 1 ./createNetwork -o <dirname> -nra 20000 -nout 170 -gee 0.004 -npsc 3 -md 0.0 -sd 0.0 --synfire
+
+wire a single synfire chain with no interneurons and delays as in real HVC
+mpirun -np 1 ./createNetwork -o <dirname> -nra 20000 -nout 170 -gee 0.004 -npsc 1 -md 3.4 -sd 2.27 --synfire
+
+wire a single synfire chain with interneurons and no delays
+mpirun -np 1 ./createNetwork -o <dirname> -nra 20000 -ni 5500 -nout 170 -gee 0.004 -gie 0.015 -gei 0.25 -pei 0.1 -pie 0.1 -npsc 1 -md 0.0 -sd 0.0 --synfire
+
+wire a polychronous network with no interneurons and delays as in real HVC
+mpirun -np 20 ./createNetwork -o <dirname> -nra 20000 -nout 170 -maxnin 180 -gee 0.004 -sm 1.0 -md 3.4 -sd 2.27 --polychronous
