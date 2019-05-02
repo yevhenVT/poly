@@ -1,3 +1,5 @@
+The code was used to produce results of the paper "Local axonal conduction delays underlie precise timing of a neural sequence" (currently under review). In short, we suggest a new feedforward network architecture that is able to produce precise temporal sequences. We develop an algorithm to generate a network and illustrate how measured axonal conduction delays in songbird HVC naturally incorporate into the model and produce a uniform temporal activity. More details will be provided once the paper is published.
+
 Author of the model: Yevhen Tupikov (2018-2019)
 We provide the source code used to generate Figures 2-5. Since the process of wiring polychronous networks takes considerable time (up to 30 hours using 20 CPU cores), we only run the code for simulation of synfire chain dynamics and give examples on how to run the code for polychronous network. However, we provide all the data files with simulation results and the python scripts to visualize them.
 
