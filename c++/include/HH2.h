@@ -57,9 +57,12 @@ public:
 	void set_dynamics(double tS); // set timestep
 	void set_to_rest(); // set all variables to the rest state
 	void reset(); // reset neuron activity. Last values for all variables are assinged to the first elements 
-	
+
 	void Debraband_step(); // one step of Debraband
 	void Debraband_step_no_target_update(); // Debraband step with no update of targets
+
+	void Euler_Maruyama_step(); // one step of Euler-Maruyama order 1 method
+	void Euler_Maruyama_step_no_target_update(); // Euler-Maruyama step with no update of targets
 
 	void Runge4_step(); // one step of Runge Kutta order 4
 	void R4_step_no_target_update(); // Runge Kutta 4 step with no update of targets
@@ -119,6 +122,9 @@ protected:
 	std::vector<double> buffer_Vd;
 	std::vector<double> buffer_Ged;
 	std::vector<double> buffer_Gid;
+	std::vector<double> buffer_Is;
+	std::vector<double> buffer_Id;
+	
 	
 	// buffers using for full state recording
 	std::vector<double> buffer_n;

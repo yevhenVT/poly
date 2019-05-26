@@ -145,6 +145,8 @@ void HH2::set_recording(std::string filename)
 	buffer_Vd.resize(BUFFER_SIZE);
 	buffer_Ged.resize(BUFFER_SIZE);
 	buffer_Gid.resize(BUFFER_SIZE);
+	buffer_Is.resize(BUFFER_SIZE);
+	buffer_Id.resize(BUFFER_SIZE);
 }
 
 
@@ -319,6 +321,8 @@ void HH2::write_buffers()
 		output.write(reinterpret_cast<const char*>(&buffer_Vd[i]), sizeof(buffer_Vd[i]));
 		output.write(reinterpret_cast<const char*>(&buffer_Ged[i]), sizeof(buffer_Ged[i]));
 		output.write(reinterpret_cast<const char*>(&buffer_Gid[i]), sizeof(buffer_Gid[i]));
+		output.write(reinterpret_cast<const char*>(&buffer_Is[i]), sizeof(buffer_Is[i]));
+		output.write(reinterpret_cast<const char*>(&buffer_Id[i]), sizeof(buffer_Id[i]));
 	}
 	
 	output.close();
@@ -368,6 +372,9 @@ void HH2::record_state()
 	buffer_Vd[_buffer_counter] = _Vd;
 	buffer_Ged[_buffer_counter] = _Gexc_d;
 	buffer_Gid[_buffer_counter] = _Ginh_d;
+	buffer_Is[_buffer_counter] = _Is;
+	buffer_Id[_buffer_counter] = _Id;
+	
 	
 	//std::cout << "_time = " << _time << "\n";
 	//std::cout << "itime = " << itime << "\n";
@@ -418,7 +425,17 @@ void HH2::R4_step_no_target_update()
 	this->state_noise_check();
 	this->Runge4_step();
 }
-
+void HH2::Euler_Maruyama_step_no_target_update()
+{
+	if (_recorded)
+		this->record_state();
+	
+	if (_recorded_full)
+		this->record_state_full();
+	
+	this->state_noise_check();
+	this->Euler_Maruyama_step();
+}
 
 void HH2::Debraband_step_no_target_update()
 {
@@ -498,6 +515,32 @@ void HH2::noise_check(double& G, double G_noise, double lambda, double& noise_ti
 		}
 }
 
+void HH2::Euler_Maruyama_step()
+{
+	double Js = _generator->normal_distribution() * _sigma_soma;
+	double Jd = _generator->normal_distribution() * _sigma_dend;
+
+	_Vs = _Vs + _timestep * kVs(_Vs, _Vd, _n, _h, _time) + Js * sqrt(_timestep) * 100000 / (As * cm);
+	_Vd = _Vd + _timestep * kVd(_Vs, _Vd, _r, _c, _Ca, _time) + Jd * sqrt(_timestep) * 100000 / (Ad * cm);
+
+	_n = _n + _timestep * kn(_Vs, _n);
+	_h = _h + _timestep * kh(_Vs, _h);
+	_r = _r + _timestep * kr(_Vd, _r);
+	_Ca = _Ca + _timestep * kCa(_Vd, _r, _Ca);
+	_c = _c + _timestep * kc(_Vd, _c);
+	
+	_Gexc_d = Ge_d(_time + _timestep);
+    _Gexc_s = Ge_s(_time + _timestep);
+
+	_Ginh_d = Gi_d(_time + _timestep);
+	_Ginh_s = Gi_s(_time + _timestep);
+	
+	_time = _time + _timestep;
+	
+	_Id = IdExt(_time) + _mu_dend + Jd;
+	_Is = IsExt(_time) + _mu_soma + Js;
+}
+
 void HH2::Debraband_step()
 {
 	double H1Vs, H2Vs, H3Vs, H4Vs;	
@@ -533,11 +576,9 @@ void HH2::Debraband_step()
 	double J1d = point_distribution[ind1d];
 	double J2d = point_distribution[ind2d];
 	
-	_Id += _mu_dend + J1d * _sigma_dend;
-	_Is += _mu_soma + J1s * _sigma_soma;
 	
-	H1Vs = _Vs + sqrt(_timestep) * _sigma_soma * (-0.01844540496323970 * J1s - 0.1866426386543421 * J2s) / (As * cm);
-	H1Vd = _Vd + sqrt(_timestep) * _sigma_dend * (-0.01844540496323970 * J1d - 0.1866426386543421 * J2d) / (Ad * cm);
+	H1Vs = _Vs + sqrt(_timestep) * _sigma_soma * (-0.01844540496323970 * J1s - 0.1866426386543421 * J2s) * 100000 / (As * cm);
+	H1Vd = _Vd + sqrt(_timestep) * _sigma_dend * (-0.01844540496323970 * J1d - 0.1866426386543421 * J2d) * 100000 / (Ad * cm);
 	H1Ca = _Ca;
 	H1n  = _n;
 	H1h  = _h;
@@ -552,8 +593,8 @@ void HH2::Debraband_step()
 	a1c = kc(H1Vd, H1c);
 	a1Ca = kCa(H1Vd, H1r, H1Ca);
 
-	H2Vs = _Vs + _timestep * a1Vs + sqrt(_timestep) * _sigma_soma * (0.8017012756521233 * J1s - 0.8575745885712401 * J2s) / (As * cm);
-	H2Vd = _Vd + _timestep * a1Vd + sqrt(_timestep) * _sigma_dend * (0.8017012756521233 * J1d - 0.8575745885712401 * J2d) / (Ad * cm);
+	H2Vs = _Vs + _timestep * a1Vs + sqrt(_timestep) * _sigma_soma * (0.8017012756521233 * J1s - 0.8575745885712401 * J2s) * 100000 / (As * cm);
+	H2Vd = _Vd + _timestep * a1Vd + sqrt(_timestep) * _sigma_dend * (0.8017012756521233 * J1d - 0.8575745885712401 * J2d) * 100000 / (Ad * cm);
 	H2Ca = _Ca + _timestep * a1Ca;
 	H2n =  _n  + _timestep * a1n;
 	H2h =  _h  + _timestep * a1h;
@@ -568,8 +609,8 @@ void HH2::Debraband_step()
 	a2c = kc(H2Vd, H2c);
 	a2Ca = kCa(H2Vd, H2r, H2Ca);
 
-	H3Vs = _Vs + _timestep * (3 * a1Vs + a2Vs) / 8 + sqrt(_timestep) * _sigma_soma * (0.5092227024816198 * J1s - 0.4723392695015512 * J2s) / (As * cm);
-	H3Vd = _Vd + _timestep * (3 * a1Vd + a2Vd) / 8 + sqrt(_timestep) * _sigma_dend * (0.5092227024816198 * J1d - 0.4723392695015512 * J2d) / (Ad * cm);
+	H3Vs = _Vs + _timestep * (3 * a1Vs + a2Vs) / 8 + sqrt(_timestep) * _sigma_soma * (0.5092227024816198 * J1s - 0.4723392695015512 * J2s) * 100000 / (As * cm);
+	H3Vd = _Vd + _timestep * (3 * a1Vd + a2Vd) / 8 + sqrt(_timestep) * _sigma_dend * (0.5092227024816198 * J1d - 0.4723392695015512 * J2d) * 100000 / (Ad * cm);
 	H3Ca = _Ca + _timestep * (3 * a1Ca + a2Ca) / 8;
 	H3n  = _n  + _timestep * (3 * a1n + a2n) / 8;
 	H3h  = _h  + _timestep * (3 * a1h + a2h) / 8;
@@ -585,10 +626,10 @@ void HH2::Debraband_step()
 	a3Ca = kCa(H3Vd, H3r, H3Ca);
 
 	H4Vs = _Vs + _timestep * (-0.4526683126055039 * a1Vs - 0.4842227708685013 * a2Vs + 1.9368910834740051 * a3Vs)
-		 + sqrt(_timestep) * _sigma_soma * (0.9758794209767762 * J1s + 0.3060354860326548 * J2s) / (As * cm);
+		 + sqrt(_timestep) * _sigma_soma * (0.9758794209767762 * J1s + 0.3060354860326548 * J2s) * 100000 / (As * cm);
 	
 	H4Vd = _Vd + _timestep * (-0.4526683126055039 * a1Vd - 0.4842227708685013 * a2Vd + 1.9368910834740051 * a3Vd)
-		 + sqrt(_timestep) * _sigma_dend * (0.9758794209767762 * J1d + 0.3060354860326548 * J2d) / (Ad * cm);
+		 + sqrt(_timestep) * _sigma_dend * (0.9758794209767762 * J1d + 0.3060354860326548 * J2d) * 100000 / (Ad * cm);
 
 	H4Ca = _Ca + _timestep * (-0.4526683126055039 * a1Ca - 0.4842227708685013 * a2Ca + 1.9368910834740051 * a3Ca);
 	H4n  = _n  + _timestep * (-0.4526683126055039 * a1n - 0.4842227708685013 * a2n + 1.9368910834740051 * a3n);
@@ -627,7 +668,8 @@ void HH2::Debraband_step()
 	_Id = IdExt(_time);
 	_Is = IsExt(_time);
 	
-	
+	_Id += _mu_dend + J1d * _sigma_dend;
+	_Is += _mu_soma + J1s * _sigma_soma;
 }
 
 void HH2::Runge4_step()

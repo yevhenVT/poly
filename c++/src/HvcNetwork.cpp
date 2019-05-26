@@ -4,7 +4,6 @@
 #include <iomanip>
 #include <random>
 #include <fstream>
-#include <boost/dynamic_bitset.hpp>
 #include <set>
 #include <tuple>
 #include <unordered_map>

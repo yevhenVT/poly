@@ -28,25 +28,21 @@ def plot_spikes(duration, filename):
     f = plt.figure()
     ax1 = f.add_subplot(111)
     
-    exceededDuration = False
-
     # show 10% of spikes
     for i in range(len(spike_times)):
         if i % 10 == 0:
             for spike in spike_times[i]:
-                ax1.vlines(spike, i-0.5, i+0.5)
+                if spike < duration:
+                    ax1.vlines(spike, i-0.5, i+0.5)
             
-                if spike > duration:
-                    exceededDuration = True
-        if exceededDuration:
-            break
-    
+                
     plt.tick_params(axis='y',which='both',bottom='off',top='off',labelbottom='off')
         
     
     ax1.set_ylabel("Neuron id")
     ax1.set_xlabel("Time (ms)")
     ax1.set_xlim([0, duration])
+
     plt.show()    
 
 def read_spikes(filename):
