@@ -21,9 +21,9 @@ const double HvcNetwork::TIMESTEP = 0.02; // time step for dynamics in ms
 const double HvcNetwork::NETWORK_UPDATE_FREQUENCY = 0.1; // how often network state should be updated in ms
 
 const double HvcNetwork::WHITE_NOISE_MEAN_SOMA = 0.0; // dc component of white noise to soma
-const double HvcNetwork::WHITE_NOISE_STD_SOMA = 0.1; // variance of white noise to soma
+const double HvcNetwork::WHITE_NOISE_STD_SOMA = 0.0; // variance of white noise to soma
 const double HvcNetwork::WHITE_NOISE_MEAN_DEND = 0.0; // dc component of white noise to dendrite
-const double HvcNetwork::WHITE_NOISE_STD_DEND = 0.2; // variance of white noise to dendrite
+const double HvcNetwork::WHITE_NOISE_STD_DEND = 0.0; // variance of white noise to dendrite
 
 			
 HvcNetwork::HvcNetwork(unsigned seed)
@@ -37,6 +37,50 @@ HvcNetwork::HvcNetwork(unsigned seed)
     Gei_max = -1.0; // max strength of HVC(RA) -> HVC(I) connectio
     Gee_max = -1.0;
 }
+
+void HvcNetwork::wire_random_feedforward(int num_output, double mean_delay, double sd_delay,
+											std::string outputDir){
+	N_TR = num_output;
+	
+	if (MPI_rank == 0){
+		std::vector<int> possible_targets(N_RA-1);
+		
+		std::iota(possible_targets.begin(), possible_targets.end(), 1);
+		std::reverse(possible_targets.begin(), possible_targets.end());
+		
+		for (int i = 0; i < N_RA-num_output; i++){
+			std::vector<int> targets = sample_randomly_noreplacement_from_array(possible_targets, num_output, noise_generator);
+			std::vector<double> delays(num_output);
+					
+			if (mean_delay > 1e-3)
+				delays = sample_axonal_delays_from_lognormal(num_output, mean_delay, sd_delay);
+					
+			
+			for (int j = 0; j < num_output; j++){
+				syn_ID_RA_RA[i].push_back(targets[j]);
+				axonal_delays_RA_RA[i].push_back(delays[j]);
+				weights_RA_RA[i].push_back(this->sample_Ge2e());
+			}
+			
+			possible_targets.pop_back();		
+		}								
+		
+		for (int i = N_RA-num_output; i < N_RA-1; i++){
+			std::vector<double> delays(N_RA-i-1);
+					
+			if (mean_delay > 1e-3)
+				delays = sample_axonal_delays_from_lognormal(N_RA-i-1, mean_delay, sd_delay);
+			
+			//std::cout << "delays.size = " << delays.size() << std::endl;
+			for (int j = i+1; j < N_RA; j++){
+				syn_ID_RA_RA[i].push_back(j);
+				axonal_delays_RA_RA[i].push_back(delays[j-i-1]);
+				weights_RA_RA[i].push_back(this->sample_Ge2e());
+			}	
+		}
+		this->write_experimental_network_to_directory(outputDir);		
+	}	
+}	
 
 void HvcNetwork::wire_parallel_chains_from_network_without_RA2RA_connections(int num_chains, int num_neurons_in_layer, 
 																		double mean_delay, double sd_delay,
@@ -99,6 +143,228 @@ void HvcNetwork::wire_parallel_chains_from_network_without_RA2RA_connections(int
 		
 		// write results to a directory
 		this->write_experimental_network_to_directory(outputDir);		
+	}
+}
+
+void HvcNetwork::scatter_global_to_local_double(const std::vector<double>& global,
+												std::vector<double>& local){
+	
+	int *sendcounts = new int[MPI_size];
+    int *displs = new int[MPI_size];
+	
+	sendcounts[0] = N_RA_sizes[0];
+	displs[0] = 0;
+
+	for (int i = 1; i < MPI_size; i++)
+	{
+		sendcounts[i] = N_RA_sizes[i];
+		displs[i] = displs[i-1] + sendcounts[i-1];
+	}
+	
+	local.resize(N_RA_local);
+	
+	// send number of targets to all processes
+	MPI_Scatterv(&global[0], sendcounts, displs, MPI_DOUBLE, 
+					&local[0], N_RA_local, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+	
+	delete[] sendcounts;
+	delete[] displs;
+}
+
+void HvcNetwork::wire_polychronous_network_integrationTimes(int num_outputs, int max_num_inputs,
+			double synch_margin, std::pair<double, double> c_range, std::string outputDir)
+{
+	std::set<int> network_neurons; // connected HVC-RA neurons that are supposed to burst
+	std::vector<double> assigned_burst_labels; // array which stores assigned burst labels for added neurons
+	std::vector<double> integration_times; // array which stores integration times of neurons in the network
+	std::vector<double> capacitance_dend_local; // local array which stores integration times of neurons in the network
+	std::vector<double> capacitance_dend_global; // global array which stores integration times of neurons in the network
+	
+	std::vector<bool> indicators_neuron_connected; // indicator that output connections were sampled for this HVC-RA
+	std::vector<int> num_inputs; // number of input connections for neurons
+		
+	if (MPI_rank == 0)
+	{
+		assigned_burst_labels.resize(N_RA);
+		
+		std::fill(assigned_burst_labels.begin(), assigned_burst_labels.end(), -1.0);		
+
+		
+		this->sample_capacitance_and_integration_times(N_RA, c_range, capacitance_dend_global, integration_times);
+		
+		// keep dendritic capacitance of training neurons at original value
+		// to achieve synchronous spiking of training neurons	
+		double mean_capacitance = std::accumulate(capacitance_dend_global.begin(), capacitance_dend_global.end(), 0.0) / static_cast<double>(N_RA);
+		double mean_integration_time = std::accumulate(integration_times.begin(), integration_times.end(), 0.0) / static_cast<double>(N_RA);
+		
+		for (size_t i = 0; i < training_neurons.size(); i++){
+			network_neurons.insert(training_neurons[i]);
+			capacitance_dend_global[training_neurons[i]] = mean_capacitance;
+			integration_times[training_neurons[i]] = mean_integration_time;
+		}
+			
+		indicators_neuron_connected.resize(N_RA);
+		num_inputs.resize(N_RA);
+		
+		std::fill(indicators_neuron_connected.begin(), indicators_neuron_connected.end(), false);
+		std::fill(num_inputs.begin(), num_inputs.end(), 0);	
+		//this->write_training_neurons((outputDir + "training_neurons.bin").c_str());
+		//std::cout << "Global array\n"
+		//		  << "Training neurons:\n";
+		//for (int i = 0; i < N_RA_sizes[0] + N_RA_sizes[1]; i++){
+		//	if (i == N_RA_sizes[0]) std::cout << "Rank 1\n";
+		//	std::cout << capacitance_dend_global[i] << ", " << integration_times[i] << std::endl;
+		//}
+		
+		this->write_capacitance_and_integration_time(capacitance_dend_global, 
+										integration_times, (outputDir + "cm_dend_and_integration_times.bin").c_str());
+	
+	}
+	
+	
+	// send dendritic capacitance to slaves
+	this->scatter_global_to_local_double(capacitance_dend_global, capacitance_dend_local);
+	
+	
+	//if (MPI_rank == 1) std::cout << "Local array\n";
+		
+	// set dendritic capacitance for neurons
+	for (int i = 0; i < N_RA_local; i++){
+		HVCRA_local[i].set_cm_dend(capacitance_dend_local[i]);
+		//if (MPI_rank == 1)
+		//	std::cout << capacitance_dend_local[i] << std::endl;
+	}
+	
+	int iter = 1;
+	
+	double trial_extend = 20.0; // in ms; trial duration is extended by trial_extend value
+	double stop_time; // trial duration
+	double max_burst_time; // maximum burst time of HVC-RA neuron in the network
+	
+	int min_num_neurons_to_connect = 1;
+	double time_to_connect = 2.0;
+	
+	int continue_growth = 1;
+	int save_iter = 1;
+	
+	// make first iteration to get spike timing of training neurons
+	stop_time = WAITING_TIME + trial_extend;
+	
+	this->run_polychronous_network(stop_time);
+	
+	// change burst labels of training neurons
+	if (MPI_rank == 0){
+		for (int i = 0; i < N_TR; i++)
+			if ( !spikes_in_trial_soma_global[training_neurons[i]].empty() )
+				assigned_burst_labels[training_neurons[i]] = spikes_in_trial_soma_global[training_neurons[i]][0];
+	
+		max_burst_time = *std::max_element(assigned_burst_labels.begin(), assigned_burst_labels.end());
+	}
+	
+	this->randomize_after_trial();
+	
+	MPI_Bcast(&max_burst_time, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+	
+	stop_time = max_burst_time + trial_extend;
+	
+	while (continue_growth == 1)
+	{
+		if (MPI_rank == 0)
+			std::cout << "Iteration " << iter << "\n" << std::endl;
+			
+		this->run_polychronous_network(stop_time);
+		
+		if (MPI_rank == 0)
+		{	
+			//~ // print burst labels
+			//~ for (int j = 0; j < N_RA; j++)
+			//~ {
+				//~ if ( spikes_in_trial_soma_global[j].size() > 0 )
+					//~ std::cout << "Neuron " << j << " burst time = " << spikes_in_trial_soma_global[j][0] << " burst label = " << assigned_burst_labels[j] << "\n";
+					//~ 
+			//~ }
+			
+					
+			std::cout << std::endl;
+			
+											  
+			if (this->wire_polychronous_network_integrationTimes_iteration(min_num_neurons_to_connect, time_to_connect,
+								synch_margin, num_outputs, num_inputs, max_num_inputs,
+								indicators_neuron_connected,
+								assigned_burst_labels, integration_times,
+								network_neurons) < 0 )
+				continue_growth = 0;
+			
+			
+			if ( network_neurons.size() / 1000 == save_iter )
+			{			
+				std::string fileSimName = "e" + std::to_string(Gee_max) + "_i" + std::to_string(Gie_max) + "_";
+			
+				this->write_dend_spike_times((outputDir + fileSimName + "dendSpikes.bin").c_str());
+				this->write_soma_spike_times((outputDir + fileSimName + "somaSpikes.bin").c_str());
+			
+				this->write_interneuron_spike_times((outputDir + fileSimName + "interneuron_spikes.bin").c_str());
+				
+				this->write_experimental_network_to_directory(outputDir);
+				
+				std::string fileBurstLabels = outputDir + "burstLabels.bin";
+	
+				this->write_burst_labels(assigned_burst_labels, fileBurstLabels.c_str());
+				save_iter += 1;
+				
+			}
+			
+			///////////////////////////////////////
+			// trial duration for sampled labels //
+			///////////////////////////////////////
+			max_burst_time = *std::max_element(assigned_burst_labels.begin(), assigned_burst_labels.end());
+			
+			
+			
+			std::cout << "Connected network size = " << network_neurons.size() << "\n" << std::endl;
+			std::cout << "Max burst time = " << max_burst_time << "\n" << std::endl;
+			
+			if (network_neurons.size() >= N_RA)
+				continue_growth = 0;
+		}
+		
+		this->randomize_after_trial();
+		
+		// send new connections and axonal delays to slaves
+		this->scatter_connections_RA2RA();
+		
+		MPI_Bcast(&continue_growth, 1, MPI_INT, 0, MPI_COMM_WORLD);
+		MPI_Bcast(&max_burst_time, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+		
+		stop_time = max_burst_time + trial_extend;
+
+		
+		iter += 1;
+	}
+	
+	stop_time = max_burst_time + trial_extend;
+
+	std::string fileSimName = "e" + std::to_string(Gee_max) + "_i" + std::to_string(Gie_max) + "_";
+
+		
+	this->run_polychronous_network(stop_time);
+		
+	if (MPI_rank == 0) 
+	{
+		//~ std::cout << "Network neurons:\n";
+		//~ 
+		//~ for (auto it = network_neurons.begin(); it != network_neurons.end(); it++)
+			//~ std::cout << *it << ", ";
+		//~ std::cout << "\n" << std::endl;
+		//~ 
+		// write burst labels
+		std::string fileBurstLabels = outputDir + "burstLabels.bin";
+	
+		this->write_burst_labels(assigned_burst_labels, fileBurstLabels.c_str());
+		this->write_dend_spike_times((outputDir + fileSimName + "dendSpikes.bin").c_str());
+		this->write_soma_spike_times((outputDir + fileSimName + "somaSpikes.bin").c_str());
+			
+		this->write_interneuron_spike_times((outputDir + fileSimName + "interneuron_spikes.bin").c_str());
 	}
 }
 
@@ -263,6 +529,984 @@ void HvcNetwork::wire_polychronous_network_customDelays(int num_outputs, int max
 		this->write_interneuron_spike_times((outputDir + fileSimName + "interneuron_spikes.bin").c_str());
 	}
 }
+
+int HvcNetwork::wire_polychronous_network_integrationTimes_iteration(int min_num_neurons_to_connect, double time_to_connect,
+								double synch_margin, int num_outputs, std::vector<int>& num_inputs, int max_num_inputs,
+								std::vector<bool>& indicators_connected_to_targets,
+								std::vector<double>& assigned_burst_labels, std::vector<double>& integration_times,
+								std::set<int>& network_neurons)
+{		
+	// wire connections so that they arrive synchronously
+	
+	// create sorted array with burst times of all neurons
+	std::vector<std::pair<double, int>> all_first_spike_times_sorted; // sorted first spike times of neurons
+	std::vector<std::pair<double,int>> burst_labels_of_silent_sorted; // sorted assigned burst labels of silent neurons
+
+
+	for (int i = 0; i < N_RA; i++)
+	{
+		int num_bursts = static_cast<int>(spikes_in_trial_dend_global[i].size());
+		
+		//if ( num_bursts > 1 )
+		//	std::cout << "Neuron " << i << " bursts " << num_bursts << " times!\n" << std::endl;
+		
+		if ( (num_bursts == 0) && ( assigned_burst_labels[i] > 0 ) )
+			burst_labels_of_silent_sorted.push_back(std::pair<double,int>(assigned_burst_labels[i], i));
+			
+		
+		if ( !spikes_in_trial_soma_global[i].empty() )
+			all_first_spike_times_sorted.push_back(std::pair<double,int>(spikes_in_trial_soma_global[i][0], i));
+	}
+	
+	
+	// sort burst times and labels
+	std::sort(all_first_spike_times_sorted.begin(), all_first_spike_times_sorted.end());
+	std::sort(burst_labels_of_silent_sorted.begin(), burst_labels_of_silent_sorted.end()); 
+	
+	
+	// generate array with candidates to connect	
+	std::multimap<double, int> candidate_targets; // list of labeled candidates for targeting: (burst time, neuron_id) 
+	
+	std::set<int> new_source_neurons;
+	
+	std::vector<std::pair<double,int>> new_source_first_spike_times_sorted;
+	
+	double max_wired_burst_time = -100;
+	
+	// find the the largest burst time of wired neuron
+	for (size_t i = 0; i < all_first_spike_times_sorted.size(); i++)
+	{
+		int neuron_id = all_first_spike_times_sorted[i].second;
+		double burst_time = all_first_spike_times_sorted[i].first;
+		
+		if (( indicators_connected_to_targets[neuron_id] ) && (burst_time > max_wired_burst_time) )
+			max_wired_burst_time = burst_time;
+		
+	}
+	
+	double earliest_new_source_burst = max_wired_burst_time - 10.0;
+	
+	// sample new source neurons
+	
+	for (size_t i = 0; i < all_first_spike_times_sorted.size(); i++)
+	{
+		int neuron_id = all_first_spike_times_sorted[i].second;
+		
+		if ( ( !indicators_connected_to_targets[neuron_id] ) && (all_first_spike_times_sorted[i].first > earliest_new_source_burst) )
+		{
+			if ( !new_source_first_spike_times_sorted.empty() )
+			{
+				if ( ( new_source_first_spike_times_sorted.size() < min_num_neurons_to_connect ) || ( all_first_spike_times_sorted[i].first - new_source_first_spike_times_sorted[0].first <= time_to_connect) )
+				{
+					new_source_first_spike_times_sorted.push_back(all_first_spike_times_sorted[i]);
+					new_source_neurons.insert(neuron_id);
+				}
+				
+				else if ( ( new_source_first_spike_times_sorted.size() >= min_num_neurons_to_connect ) && ( all_first_spike_times_sorted[i].first - new_source_first_spike_times_sorted[0].first > time_to_connect ) )
+					break;	
+					
+			}
+			
+			else
+			{
+				new_source_first_spike_times_sorted.push_back(all_first_spike_times_sorted[i]);
+				new_source_neurons.insert(neuron_id);
+			}				
+		}
+	}
+	
+	if (new_source_neurons.empty())	{
+		std::cout << "No new source neurons!\n" << std::endl;
+		return -1;
+	}
+	
+	static int num_removed_silent_neurons = 0;
+	
+	//Don't keep non-robust neurons	
+	// find silent neurons with burst labels smaller than smallest burst time of source neuron
+	for (size_t i = 0; i < burst_labels_of_silent_sorted.size(); i++)
+	{
+		if ( burst_labels_of_silent_sorted[i].first < new_source_first_spike_times_sorted[0].first )
+		{
+			int neuron_id = burst_labels_of_silent_sorted[i].second;
+			
+			std::cout << "Burst label of silent neuron: " << burst_labels_of_silent_sorted[i].first
+			          << " num_inputs = " << num_inputs[neuron_id] << " Smallest first spike time of source: " << new_source_first_spike_times_sorted[0].first
+			          << " Largest first spike time of source: " << new_source_first_spike_times_sorted.back().first << "\n" << std::endl;
+		
+			// remove silent neurons from network
+			// erase all synapses to neuron
+			this->remove_connections_to_neurons(neuron_id);
+			num_removed_silent_neurons++;
+			
+			// update number of inputs for connected neurons
+			for (size_t j = 0; j < syn_ID_RA_RA[neuron_id].size(); j++)
+			{
+				int target_id = syn_ID_RA_RA[neuron_id][j];
+				
+				num_inputs[target_id] -= 1;
+			}
+			
+			
+			// erase all synapses from neuron
+			std::vector<int>().swap(syn_ID_RA_RA[neuron_id]);
+			std::vector<double>().swap(axonal_delays_RA_RA[neuron_id]);
+			std::vector<double>().swap(weights_RA_RA[neuron_id]);			
+			
+			assigned_burst_labels[neuron_id] = -1.0;
+			//assigned_total_conductances[neuron_id] = 0.0;
+			num_inputs[neuron_id] = 0;
+			
+			indicators_connected_to_targets[neuron_id] = false;
+			
+			auto it = network_neurons.find(neuron_id);
+			
+			if (it != network_neurons.end())
+			{
+				network_neurons.erase(it);
+				//std::cout << "Neuron " << neuron_id << " was removed from network because it did not spike robustly\n" << std::endl;
+			}
+			else
+				std::cerr << "Neuron " << neuron_id << " to remove is not found in network_neurons!\n" << std::endl;
+		
+		}
+	}
+	
+	//std::cout << "Total number of removed silent neurons: " << num_removed_silent_neurons << std::endl;
+
+	std::vector<int> num_labels_in_windows; // number of burst labels in windows
+	std::vector<int> num_onsets_in_windows; // number of burst onsets in windows
+	
+	std::vector<std::vector<double>> burst_labels_in_windows; // burst labels of neurons in windows
+	std::vector<std::vector<double>> burst_onsets_in_windows; // burst onsets of neurons in windows
+	
+	
+	std::vector<int> num_labels_in_small_windows; // number of burst labels in windows
+	std::vector<std::vector<double>> burst_labels_in_small_windows; // burst labels of neurons in small windows
+	
+	
+	double small_window = 1.0; // was 1.0
+	double window = 1.0; // was 1.0
+	double min_label = 1e6;
+	double min_burst_onset = all_first_spike_times_sorted[0].first;
+	
+	
+	for (size_t i = 0; i < assigned_burst_labels.size(); i++)
+	{
+		if ( ( assigned_burst_labels[i] > 0) && ( assigned_burst_labels[i] < min_label ) )
+			min_label = assigned_burst_labels[i];
+	}
+	
+	std::cout << "New source neurons and their first spike times\n";
+	for (size_t i = 0; i < new_source_first_spike_times_sorted.size(); i++)
+		std::cout << "Source neuron " << new_source_first_spike_times_sorted[i].second 
+				  << " with first spike time = " << new_source_first_spike_times_sorted[i].first << std::endl;
+	
+	
+	
+	// add candidates if 
+	// - burst label is assigned;
+	// - neuron is not connected to targets
+	// - neuron is not among new source neurons
+	// - neuron fires slightly before or later than the earliest new source neuron
+	
+	if ( !new_source_first_spike_times_sorted.empty() )
+	{
+		for (size_t i = 0; i < assigned_burst_labels.size(); i++)
+		{
+			if ( assigned_burst_labels[i] > 0 )
+			{	
+				//////////////////////////////////////
+				// allow to target training neurons //
+				//////////////////////////////////////
+				if ( ( new_source_neurons.find(i) == new_source_neurons.end() ) && ( !indicators_connected_to_targets[i] ) 
+								&& ( num_inputs[i] < max_num_inputs ) && 
+								(new_source_first_spike_times_sorted[0].first - assigned_burst_labels[i] <= 5.0) )
+				candidate_targets.insert(std::pair<double,int>(assigned_burst_labels[i], i));
+			}
+		}
+	}
+	else
+	{
+		std::cout << "No source neurons!\n" << std::endl;
+		return -1;
+	}
+	
+	
+	
+	// sort candidates by number of input connections
+	std::multimap<int, std::pair<double, int>> candidates_by_input;
+	
+	for (std::multimap<double,int>::iterator it = candidate_targets.begin(); it != candidate_targets.end(); it++)
+	{
+		double target_label = (*it).first;
+		int target_id = (*it).second;
+			
+		candidates_by_input.insert(std::make_pair(num_inputs[target_id], *it));	
+	}
+	
+	
+	//~ std::cout << "\nCandidate neurons for connection and their assigned burst labels\n";
+	//~ for (auto it = candidate_targets.begin(); it != candidate_targets.end(); it++)
+		//~ std::cout << "Candidate neuron " << (*it).second 
+				  //~ << " with assigned burst label = " << (*it).first 
+				  //~ << " and integration time = " << integration_times[(*it).second] << std::endl;
+	
+	
+		
+	double DELAY_EARLY_MARGIN = synch_margin / 2.0;
+	double DELAY_LATE_MARGIN = synch_margin / 2.0;
+	int NUM_NEURONS_TO_SAMPLE = 1;
+	
+	double FRACTION_LOST = 0.0; // fraction of allowed lost synapses
+	
+	int num_new_source = static_cast<int>(new_source_neurons.size()); // number of new source neurons
+	
+	int total_num_outputs = num_new_source * num_outputs;
+	int allowed_num_lost = static_cast<int>(static_cast<double>(total_num_outputs) * FRACTION_LOST);
+	
+	std::vector<double> synapse_delays(total_num_outputs);
+	std::fill(synapse_delays.begin(), synapse_delays.end(), 0.0);
+	
+	//std::cout << "Number of sampled synapses: " << synapse_delays.size() << "\n";
+	//std::cout << "Allowed number of lost synapses: " << allowed_num_lost << "\n";
+	
+	
+	/////////////////////////////////////////////////////////////////
+	// Add all source neurons									   //
+	/////////////////////////////////////////////////////////////////
+	
+	std::vector<std::pair<double,int>> source_with_spikes = new_source_first_spike_times_sorted;
+	std::set<int> source_neurons = new_source_neurons;
+	
+	for (size_t i = 0; i < all_first_spike_times_sorted.size(); i++)
+	{
+		int neuron_id = all_first_spike_times_sorted[i].second;
+		
+		if (indicators_connected_to_targets[neuron_id])
+		{
+			source_with_spikes.push_back(all_first_spike_times_sorted[i]);
+			source_neurons.insert(neuron_id);
+		}
+		
+	}
+	
+	std::sort(source_with_spikes.begin(), source_with_spikes.end());
+	
+	//std::cout << "\nAll source neurons and their first spike times\n";
+	//for (size_t i = 0; i < source_with_spikes.size(); i++)
+	//	std::cout << "Source neuron " << source_with_spikes[i].second 
+	//			  << " with first spike time = " << source_with_spikes[i].first << std::endl;
+	
+	
+	std::random_device rd;
+    std::mt19937 rng(rd());
+	
+	std::vector<double> unwired_delays = synapse_delays;
+	std::vector<std::tuple<int, int, double, double>> synapse_parameters; // synapses parameters in form (source_id, target_id, delay, length, weight, synapse_loc_x, synapse_loc_y, synapse_loc_z)
+	
+	int num_targets_sampled = 0;
+	int rewire_iteration = 1;
+		
+	// sample randomly synapses to try fo wire them starting from the target with the smallest
+	// number of inputs. If synapse cannot be wired, sample a new target.
+	// Stop if number of unwired synapses is small enough
+	while (true)
+	{
+		//std::cout << "Rewiring iteration: " << rewire_iteration << std::endl;
+		//std::cout << "Num targets sampled: " << num_targets_sampled << std::endl;
+		synapse_parameters.clear();
+		
+		std::vector<int> new_num_inputs = num_inputs; // copy number of inputs
+		std::vector<std::set<int>> added_connections(N_RA);
+		
+		
+		while ( !candidates_by_input.empty() )
+		{
+			auto it_target = candidates_by_input.begin();
+			
+			int target_id = (*it_target).second.second;
+			double target_label = (*it_target).second.first;
+			
+			//~ std::cout << "Target with smallest number of inputs, num_inputs, target_label = "
+					  //~ << target_id << ", " << num_inputs[target_id] << ", " << target_label << std::endl;
+			//~ 
+			bool target_was_connected = false; // indicator that target was connected by some source neuron
+			
+			// find source neurons that are able to connect to the target
+			auto it_earliest_source = std::lower_bound(source_with_spikes.begin(), source_with_spikes.end(), std::pair<double, int>(target_label - integration_times[target_id] - DELAY_EARLY_MARGIN, -1));
+			auto it_latest_source = std::upper_bound(source_with_spikes.begin(), source_with_spikes.end(), std::pair<double, int>(target_label - integration_times[target_id] + DELAY_LATE_MARGIN, 1e6));
+			
+			if (it_earliest_source != it_latest_source){
+				// extract source neurons that are able to connect to the target
+				// and choose source neurons randomly until match is found
+				std::vector<std::pair<double,int>> source_on_time(it_earliest_source, it_latest_source);
+
+				std::shuffle(source_on_time.begin(), source_on_time.end(), rng);
+
+				for (auto it_source = source_on_time.begin(); it_source != source_on_time.end(); it_source++){
+	
+					int source_id = (*it_source).second;
+					double source_first_spike_time = (*it_source).first;
+					
+					// ensure source is not connected to target. SINGLE CONNECTION!
+					if ( std::find(syn_ID_RA_RA[source_id].begin(), syn_ID_RA_RA[source_id].end(), target_id) != syn_ID_RA_RA[source_id].end() )
+						continue;
+					
+					// then check in array with added connections
+					if ( added_connections[source_id].find(target_id) != added_connections[source_id].end() )
+						continue;
+				
+					
+					// if spike arrives on time
+					if ((!unwired_delays.empty()) && (source_first_spike_time >= target_label - integration_times[target_id] - DELAY_EARLY_MARGIN)
+					   && (source_first_spike_time <= target_label - integration_times[target_id] + DELAY_LATE_MARGIN)){
+					
+						new_num_inputs[target_id] += 1;
+							
+						double weight = this->sample_Ge2e();
+						double delay = 0;
+						
+						// remove synapse
+						unwired_delays.pop_back();
+						
+						synapse_parameters.push_back(std::make_tuple(source_id, target_id, delay, weight));
+						
+						added_connections[source_id].insert(target_id);
+						
+						target_was_connected = true;	
+						break;
+					}
+					
+					
+				} // end loop through source neurons
+			}
+			// if target was connected by some source neuron, stop
+			// reinsert target to a new place in the target array or
+			// just delete it if number of inputs is exceeded
+			candidates_by_input.erase(it_target);
+
+			if ( target_was_connected )
+			{
+				if ( new_num_inputs[target_id] < max_num_inputs )
+					candidates_by_input.insert(std::make_pair(new_num_inputs[target_id], std::make_pair(target_label, target_id)));	 
+			}
+			
+		} // end loop through targets
+		
+		// if number of unwired synapses exceeds allowed amount, sample a new target
+		int num_remaining_synapses = static_cast<int>(unwired_delays.size());
+		
+		if (num_remaining_synapses > allowed_num_lost)
+		{
+			// exit if network already contains N_RA neurons
+			if (network_neurons.size() == N_RA) break;
+
+			int num_to_sample = NUM_NEURONS_TO_SAMPLE;
+			
+			if ( num_remaining_synapses < NUM_NEURONS_TO_SAMPLE )
+				num_to_sample = num_remaining_synapses;
+				
+			for (size_t i = 0; i < num_to_sample; i++)
+			{
+				// randomly sample source neuron
+				int ind = noise_generator.sample_integer(0, new_source_first_spike_times_sorted.size()-1);
+				int source_id = (*(new_source_first_spike_times_sorted.begin()+ind)).second;
+			
+				double source_first_spike_time = spikes_in_trial_soma_global[source_id][0];
+				
+				
+				// randomly sample a target which is not in the network
+				std::vector<int> sampling_pool(N_RA);
+				std::iota(sampling_pool.begin(), sampling_pool.end(), 0);
+				
+				int new_target_id;
+				
+				while (true)
+				{
+					int ind = noise_generator.sample_integer(0, sampling_pool.size()-1);
+					new_target_id = sampling_pool[ind];
+				
+					if (network_neurons.find(new_target_id) == network_neurons.end())
+						break;
+					
+					sampling_pool[ind] = sampling_pool.back();
+					sampling_pool.pop_back();	
+				}
+				
+				double delay = 0;
+				double label = source_first_spike_time + delay + integration_times[new_target_id];
+				
+				
+				//std::cout << "New target id : " << new_target_id << std::endl;
+				
+				num_targets_sampled += 1;
+				
+				double weight = this->sample_Ge2e();
+					
+				syn_ID_RA_RA[source_id].push_back(new_target_id);
+				weights_RA_RA[source_id].push_back(weight);
+				axonal_delays_RA_RA[source_id].push_back(delay);
+				 
+				num_inputs[new_target_id] += 1;
+							
+				assigned_burst_labels[new_target_id] = label;
+				
+				candidate_targets.insert(std::pair<double,int>(label, new_target_id));												
+				network_neurons.insert(new_target_id);
+			
+				// find synapse and delete from array with all source synapses
+				synapse_delays.pop_back();
+					
+				// delete synapse from sample array
+				unwired_delays.pop_back();	
+			
+				if (network_neurons.size() == N_RA) break;
+			}
+		}
+				
+		else
+		{
+			//std::cout << "Remaining unwired synapses: " << unwired_delays.size() << std::endl;
+			break;
+		}
+		
+		candidates_by_input.clear();
+		// update candidate by inputs array
+		for (std::multimap<double,int>::iterator it = candidate_targets.begin(); it != candidate_targets.end(); it++)
+		{
+			double target_label = (*it).first;
+			int target_id = (*it).second;
+				
+			if ( num_inputs[target_id] < max_num_inputs )
+				candidates_by_input.insert(std::make_pair(num_inputs[target_id], *it));	
+			
+		}
+		
+		//std::cout << "Remaining unwired synapses: " << unwired_delays.size() << std::endl;
+		
+		unwired_delays = synapse_delays;
+		rewire_iteration++;
+	} // end while there are synapses in the pool
+	
+	
+	
+	// update source arrays according to sampled synapses
+	for (size_t i = 0; i < synapse_parameters.size(); i++)
+	{
+		int source_id = std::get<0>(synapse_parameters[i]);
+		int target_id = std::get<1>(synapse_parameters[i]);
+		
+		double delay = std::get<2>(synapse_parameters[i]);
+		double weight = std::get<3>(synapse_parameters[i]);
+		
+		
+		
+		//~ std::cout << source_id << " -> " << target_id 
+				  //~ << " " << delay << " " << length << " " << weight
+				  //~ << " " << std::get<0>(synapse_coord) << " " << std::get<1>(synapse_coord) << " " << std::get<2>(synapse_coord) << std::endl; 
+		//~ 
+		
+		syn_ID_RA_RA[source_id].push_back(target_id);
+		weights_RA_RA[source_id].push_back(weight);
+		axonal_delays_RA_RA[source_id].push_back(delay);
+		
+		num_inputs[target_id] += 1;
+
+	}
+	
+	for (auto it = new_source_first_spike_times_sorted.begin(); it < new_source_first_spike_times_sorted.end(); it++)
+		indicators_connected_to_targets[(*it).second] = true;
+	
+	return 0;
+}
+
+/*int HvcNetwork::wire_polychronous_network_integrationTimes_iteration(int min_num_neurons_to_connect, double time_to_connect,
+								double synch_margin, int num_outputs, std::vector<int>& num_inputs, int max_num_inputs,
+								std::vector<bool>& indicators_connected_to_targets,
+								std::vector<double>& assigned_burst_labels, std::vector<double>& integration_times,
+								std::set<int>& network_neurons)
+{		
+	// wire connections so that they arrive synchronously
+	
+	// create sorted array with burst times of all neurons
+	std::vector<std::pair<double, int>> all_first_spike_times_sorted; // sorted first spike times of neurons
+	std::vector<std::pair<double,int>> burst_labels_of_silent_sorted; // sorted assigned burst labels of silent neurons
+
+
+	for (int i = 0; i < N_RA; i++)
+	{
+		int num_bursts = static_cast<int>(spikes_in_trial_dend_global[i].size());
+		
+		//if ( num_bursts > 1 )
+		//	std::cout << "Neuron " << i << " bursts " << num_bursts << " times!\n" << std::endl;
+		
+		if ( (num_bursts == 0) && ( assigned_burst_labels[i] > 0 ) )
+			burst_labels_of_silent_sorted.push_back(std::pair<double,int>(assigned_burst_labels[i], i));
+			
+		
+		if ( !spikes_in_trial_soma_global[i].empty() )
+			all_first_spike_times_sorted.push_back(std::pair<double,int>(spikes_in_trial_soma_global[i][0], i));
+	}
+	
+	
+	// sort burst times and labels
+	std::sort(all_first_spike_times_sorted.begin(), all_first_spike_times_sorted.end());
+	std::sort(burst_labels_of_silent_sorted.begin(), burst_labels_of_silent_sorted.end()); 
+	
+	
+	// generate array with candidates to connect	
+	std::multimap<double, int> candidate_targets; // list of labeled candidates for targeting: (burst time, neuron_id) 
+	
+	std::set<int> new_source_neurons;
+	
+	std::vector<std::pair<double,int>> new_source_first_spike_times_sorted;
+	
+	double max_wired_burst_time = -100;
+	
+	// find the the largest burst time of wired neuron
+	for (size_t i = 0; i < all_first_spike_times_sorted.size(); i++)
+	{
+		int neuron_id = all_first_spike_times_sorted[i].second;
+		double burst_time = all_first_spike_times_sorted[i].first;
+		
+		if (( indicators_connected_to_targets[neuron_id] ) && (burst_time > max_wired_burst_time) )
+			max_wired_burst_time = burst_time;
+		
+	}
+	
+	double earliest_new_source_burst = max_wired_burst_time - 10.0;
+	
+	// sample new source neurons
+	
+	for (size_t i = 0; i < all_first_spike_times_sorted.size(); i++)
+	{
+		int neuron_id = all_first_spike_times_sorted[i].second;
+		
+		if ( ( !indicators_connected_to_targets[neuron_id] ) && (all_first_spike_times_sorted[i].first > earliest_new_source_burst) )
+		{
+			if ( !new_source_first_spike_times_sorted.empty() )
+			{
+				if ( ( new_source_first_spike_times_sorted.size() < min_num_neurons_to_connect ) || ( all_first_spike_times_sorted[i].first - new_source_first_spike_times_sorted[0].first <= time_to_connect) )
+				{
+					new_source_first_spike_times_sorted.push_back(all_first_spike_times_sorted[i]);
+					new_source_neurons.insert(neuron_id);
+				}
+				
+				else if ( ( new_source_first_spike_times_sorted.size() >= min_num_neurons_to_connect ) && ( all_first_spike_times_sorted[i].first - new_source_first_spike_times_sorted[0].first > time_to_connect ) )
+					break;	
+					
+			}
+			
+			else
+			{
+				new_source_first_spike_times_sorted.push_back(all_first_spike_times_sorted[i]);
+				new_source_neurons.insert(neuron_id);
+			}				
+		}
+	}
+	
+	if (new_source_neurons.empty())	{
+		std::cout << "No new source neurons!\n" << std::endl;
+		return -1;
+	}
+	
+	static int num_removed_silent_neurons = 0;
+	
+	//Don't keep non-robust neurons	
+	// find silent neurons with burst labels smaller than smallest burst time of source neuron
+	for (size_t i = 0; i < burst_labels_of_silent_sorted.size(); i++)
+	{
+		if ( burst_labels_of_silent_sorted[i].first < new_source_first_spike_times_sorted[0].first )
+		{
+			int neuron_id = burst_labels_of_silent_sorted[i].second;
+			
+			std::cout << "Burst label of silent neuron: " << burst_labels_of_silent_sorted[i].first
+			          << " num_inputs = " << num_inputs[neuron_id] << " Smallest first spike time of source: " << new_source_first_spike_times_sorted[0].first
+			          << " Largest first spike time of source: " << new_source_first_spike_times_sorted.back().first << "\n" << std::endl;
+		
+			// remove silent neurons from network
+			// erase all synapses to neuron
+			this->remove_connections_to_neurons(neuron_id);
+			num_removed_silent_neurons++;
+			
+			// update number of inputs for connected neurons
+			for (size_t j = 0; j < syn_ID_RA_RA[neuron_id].size(); j++)
+			{
+				int target_id = syn_ID_RA_RA[neuron_id][j];
+				
+				num_inputs[target_id] -= 1;
+			}
+			
+			
+			// erase all synapses from neuron
+			std::vector<int>().swap(syn_ID_RA_RA[neuron_id]);
+			std::vector<double>().swap(axonal_delays_RA_RA[neuron_id]);
+			std::vector<double>().swap(weights_RA_RA[neuron_id]);			
+			
+			assigned_burst_labels[neuron_id] = -1.0;
+			//assigned_total_conductances[neuron_id] = 0.0;
+			num_inputs[neuron_id] = 0;
+			
+			indicators_connected_to_targets[neuron_id] = false;
+			
+			auto it = network_neurons.find(neuron_id);
+			
+			if (it != network_neurons.end())
+			{
+				network_neurons.erase(it);
+				//std::cout << "Neuron " << neuron_id << " was removed from network because it did not spike robustly\n" << std::endl;
+			}
+			else
+				std::cerr << "Neuron " << neuron_id << " to remove is not found in network_neurons!\n" << std::endl;
+		
+		}
+	}
+	
+	//std::cout << "Total number of removed silent neurons: " << num_removed_silent_neurons << std::endl;
+
+	std::vector<int> num_labels_in_windows; // number of burst labels in windows
+	std::vector<int> num_onsets_in_windows; // number of burst onsets in windows
+	
+	std::vector<std::vector<double>> burst_labels_in_windows; // burst labels of neurons in windows
+	std::vector<std::vector<double>> burst_onsets_in_windows; // burst onsets of neurons in windows
+	
+	
+	std::vector<int> num_labels_in_small_windows; // number of burst labels in windows
+	std::vector<std::vector<double>> burst_labels_in_small_windows; // burst labels of neurons in small windows
+	
+	
+	double small_window = 1.0; // was 1.0
+	double window = 1.0; // was 1.0
+	double min_label = 1e6;
+	double min_burst_onset = all_first_spike_times_sorted[0].first;
+	
+	
+	for (size_t i = 0; i < assigned_burst_labels.size(); i++)
+	{
+		if ( ( assigned_burst_labels[i] > 0) && ( assigned_burst_labels[i] < min_label ) )
+			min_label = assigned_burst_labels[i];
+	}
+	
+	std::cout << "New source neurons and their first spike times\n";
+	for (size_t i = 0; i < new_source_first_spike_times_sorted.size(); i++)
+		std::cout << "Source neuron " << new_source_first_spike_times_sorted[i].second 
+				  << " with first spike time = " << new_source_first_spike_times_sorted[i].first << std::endl;
+	
+	
+	
+	// add candidates if 
+	// - burst label is assigned;
+	// - neuron is not connected to targets
+	// - neuron is not among new source neurons
+	// - neuron fires slightly before or later than the earliest new source neuron
+	
+	if ( !new_source_first_spike_times_sorted.empty() )
+	{
+		for (size_t i = 0; i < assigned_burst_labels.size(); i++)
+		{
+			if ( assigned_burst_labels[i] > 0 )
+			{	
+				//////////////////////////////////////
+				// allow to target training neurons //
+				//////////////////////////////////////
+				if ( ( new_source_neurons.find(i) == new_source_neurons.end() ) && ( !indicators_connected_to_targets[i] ) 
+								&& ( num_inputs[i] < max_num_inputs ) && 
+								(new_source_first_spike_times_sorted[0].first - assigned_burst_labels[i] <= 5.0) )
+				candidate_targets.insert(std::pair<double,int>(assigned_burst_labels[i], i));
+			}
+		}
+	}
+	else
+	{
+		std::cout << "No source neurons!\n" << std::endl;
+		return -1;
+	}
+	
+	
+	
+	// sort candidates by number of input connections
+	std::multimap<int, std::pair<double, int>> candidates_by_input;
+	
+	for (std::multimap<double,int>::iterator it = candidate_targets.begin(); it != candidate_targets.end(); it++)
+	{
+		double target_label = (*it).first;
+		int target_id = (*it).second;
+			
+		candidates_by_input.insert(std::make_pair(num_inputs[target_id], *it));	
+	}
+	
+	
+	//~ std::cout << "\nCandidate neurons for connection and their assigned burst labels\n";
+	//~ for (auto it = candidate_targets.begin(); it != candidate_targets.end(); it++)
+		//~ std::cout << "Candidate neuron " << (*it).second 
+				  //~ << " with assigned burst label = " << (*it).first 
+				  //~ << " and integration time = " << integration_times[(*it).second] << std::endl;
+	
+	
+		
+	double DELAY_EARLY_MARGIN = synch_margin / 2.0;
+	double DELAY_LATE_MARGIN = synch_margin / 2.0;
+	int NUM_NEURONS_TO_SAMPLE = 1;
+	
+	double FRACTION_LOST = 0.0; // fraction of allowed lost synapses
+	
+	int num_new_source = static_cast<int>(new_source_neurons.size()); // number of new source neurons
+	
+	int total_num_outputs = num_new_source * num_outputs;
+	int allowed_num_lost = static_cast<int>(static_cast<double>(total_num_outputs) * FRACTION_LOST);
+	
+	std::vector<double> synapse_delays(total_num_outputs);
+	std::fill(synapse_delays.begin(), synapse_delays.end(), 0.0);
+	
+	//std::cout << "Number of sampled synapses: " << synapse_delays.size() << "\n";
+	//std::cout << "Allowed number of lost synapses: " << allowed_num_lost << "\n";
+	
+	
+	/////////////////////////////////////////////////////////////////
+	// Add all source neurons that spiked before but not too early //
+	/////////////////////////////////////////////////////////////////
+	
+	std::vector<std::pair<double,int>> source_with_spikes = new_source_first_spike_times_sorted;
+	std::set<int> source_neurons = new_source_neurons;
+	
+	
+	double MAX_DELAY = 50.0;
+	
+	for (size_t i = 0; i < all_first_spike_times_sorted.size(); i++)
+	{
+		int neuron_id = all_first_spike_times_sorted[i].second;
+		
+		if ( (indicators_connected_to_targets[neuron_id]) && 
+			(new_source_first_spike_times_sorted[0].first - all_first_spike_times_sorted[i].first <= MAX_DELAY))
+		{
+			source_with_spikes.push_back(all_first_spike_times_sorted[i]);
+			source_neurons.insert(neuron_id);
+		}
+		
+	}
+	
+	std::sort(source_with_spikes.begin(), source_with_spikes.end());
+	
+	std::cout << "\nAll source neurons and their first spike times\n";
+	for (size_t i = 0; i < source_with_spikes.size(); i++)
+		std::cout << "Source neuron " << source_with_spikes[i].second 
+				  << " with first spike time = " << source_with_spikes[i].first << std::endl;
+	
+	
+	std::random_device rd;
+    std::mt19937 rng(rd());
+	
+	std::vector<double> unwired_delays = synapse_delays;
+	std::vector<std::tuple<int, int, double, double>> synapse_parameters; // synapses parameters in form (source_id, target_id, delay, length, weight, synapse_loc_x, synapse_loc_y, synapse_loc_z)
+	
+	int num_targets_sampled = 0;
+	int rewire_iteration = 1;
+		
+	// sample randomly synapses to try fo wire them starting from the target with the smallest
+	// number of inputs. If synapse cannot be wired, sample a new target.
+	// Stop if number of unwired synapses is small enough
+	while (true)
+	{
+		//std::cout << "Rewiring iteration: " << rewire_iteration << std::endl;
+		//std::cout << "Num targets sampled: " << num_targets_sampled << std::endl;
+		synapse_parameters.clear();
+		
+		std::vector<int> new_num_inputs = num_inputs; // copy number of inputs
+		std::vector<std::set<int>> added_connections(N_RA);
+		
+		// shuffle spikes of source neurons
+		std::shuffle(source_with_spikes.begin(), source_with_spikes.end(), rng);
+
+		while ( !candidates_by_input.empty() )
+		{
+			auto it_target = candidates_by_input.begin();
+			
+			int target_id = (*it_target).second.second;
+			double target_label = (*it_target).second.first;
+			
+			//~ std::cout << "Target with smallest number of inputs, num_inputs, target_label = "
+					  //~ << target_id << ", " << num_inputs[target_id] << ", " << target_label << std::endl;
+			//~ 
+			bool target_was_connected = false; // indicator that target was connected by some source neuron
+			
+			// loop through all source neurons
+			for (auto it_source = source_with_spikes.begin(); it_source != source_with_spikes.end(); it_source++)
+			{	
+				int source_id = (*it_source).second;
+				double source_first_spike_time = (*it_source).first;
+				
+				// ensure source is not connected to target. SINGLE CONNECTION!
+				if ( std::find(syn_ID_RA_RA[source_id].begin(), syn_ID_RA_RA[source_id].end(), target_id) != syn_ID_RA_RA[source_id].end() )
+					continue;
+				
+				// then check in array with added connections
+				if ( added_connections[source_id].find(target_id) != added_connections[source_id].end() )
+					continue;
+			
+				
+				// if spike arrives on time
+				if ((!unwired_delays.empty()) && (source_first_spike_time >= target_label - integration_times[target_id] - DELAY_EARLY_MARGIN)
+				   && (source_first_spike_time <= target_label - integration_times[target_id] + DELAY_LATE_MARGIN)){
+				
+					new_num_inputs[target_id] += 1;
+						
+					double weight = this->sample_Ge2e();
+					double delay = 0;
+					
+					// remove synapse
+					unwired_delays.pop_back();
+					
+					synapse_parameters.push_back(std::make_tuple(source_id, target_id, delay, weight));
+					
+					added_connections[source_id].insert(target_id);
+					
+					target_was_connected = true;	
+					break;
+				}
+				
+				
+			} // end loop through source neurons
+				
+			// if target was connected by some source neuron, stop
+			// reinsert target to a new place in the target array or
+			// just delete it if number of inputs is exceeded
+			candidates_by_input.erase(it_target);
+
+			if ( target_was_connected )
+			{
+				if ( new_num_inputs[target_id] < max_num_inputs )
+					candidates_by_input.insert(std::make_pair(new_num_inputs[target_id], std::make_pair(target_label, target_id)));	 
+			}
+			
+		} // end loop through targets
+		
+		// if number of unwired synapses exceeds allowed amount, sample a new target
+		int num_remaining_synapses = static_cast<int>(unwired_delays.size());
+		
+		if (num_remaining_synapses > allowed_num_lost)
+		{
+			// exit if network already contains N_RA neurons
+			if (network_neurons.size() == N_RA) break;
+
+			int num_to_sample = NUM_NEURONS_TO_SAMPLE;
+			
+			if ( num_remaining_synapses < NUM_NEURONS_TO_SAMPLE )
+				num_to_sample = num_remaining_synapses;
+				
+			for (size_t i = 0; i < num_to_sample; i++)
+			{
+				// randomly sample source neuron
+				int ind = noise_generator.sample_integer(0, new_source_first_spike_times_sorted.size()-1);
+				int source_id = (*(new_source_first_spike_times_sorted.begin()+ind)).second;
+			
+				double source_first_spike_time = spikes_in_trial_soma_global[source_id][0];
+				
+				
+				// randomly sample a target which is not in the network
+				std::vector<int> sampling_pool(N_RA);
+				std::iota(sampling_pool.begin(), sampling_pool.end(), 0);
+				
+				int new_target_id;
+				
+				while (true)
+				{
+					int ind = noise_generator.sample_integer(0, sampling_pool.size()-1);
+					new_target_id = sampling_pool[ind];
+				
+					if (network_neurons.find(new_target_id) == network_neurons.end())
+						break;
+					
+					sampling_pool[ind] = sampling_pool.back();
+					sampling_pool.pop_back();	
+				}
+				
+				double delay = 0;
+				double label = source_first_spike_time + delay + integration_times[new_target_id];
+				
+				
+				//std::cout << "New target id : " << new_target_id << std::endl;
+				
+				num_targets_sampled += 1;
+				
+				double weight = this->sample_Ge2e();
+					
+				syn_ID_RA_RA[source_id].push_back(new_target_id);
+				weights_RA_RA[source_id].push_back(weight);
+				axonal_delays_RA_RA[source_id].push_back(delay);
+				 
+				num_inputs[new_target_id] += 1;
+							
+				assigned_burst_labels[new_target_id] = label;
+				
+				candidate_targets.insert(std::pair<double,int>(label, new_target_id));												
+				network_neurons.insert(new_target_id);
+			
+				// find synapse and delete from array with all source synapses
+				synapse_delays.pop_back();
+					
+				// delete synapse from sample array
+				unwired_delays.pop_back();	
+			
+				if (network_neurons.size() == N_RA) break;
+			}
+		}
+				
+		else
+		{
+			//std::cout << "Remaining unwired synapses: " << unwired_delays.size() << std::endl;
+			break;
+		}
+		
+		candidates_by_input.clear();
+		// update candidate by inputs array
+		for (std::multimap<double,int>::iterator it = candidate_targets.begin(); it != candidate_targets.end(); it++)
+		{
+			double target_label = (*it).first;
+			int target_id = (*it).second;
+				
+			if ( num_inputs[target_id] < max_num_inputs )
+				candidates_by_input.insert(std::make_pair(num_inputs[target_id], *it));	
+			
+		}
+		
+		//std::cout << "Remaining unwired synapses: " << unwired_delays.size() << std::endl;
+		
+		unwired_delays = synapse_delays;
+		rewire_iteration++;
+	} // end while there are synapses in the pool
+	
+	
+	
+	// update source arrays according to sampled synapses
+	for (size_t i = 0; i < synapse_parameters.size(); i++)
+	{
+		int source_id = std::get<0>(synapse_parameters[i]);
+		int target_id = std::get<1>(synapse_parameters[i]);
+		
+		double delay = std::get<2>(synapse_parameters[i]);
+		double weight = std::get<3>(synapse_parameters[i]);
+		
+		
+		
+		//~ std::cout << source_id << " -> " << target_id 
+				  //~ << " " << delay << " " << length << " " << weight
+				  //~ << " " << std::get<0>(synapse_coord) << " " << std::get<1>(synapse_coord) << " " << std::get<2>(synapse_coord) << std::endl; 
+		//~ 
+		
+		syn_ID_RA_RA[source_id].push_back(target_id);
+		weights_RA_RA[source_id].push_back(weight);
+		axonal_delays_RA_RA[source_id].push_back(delay);
+		
+		num_inputs[target_id] += 1;
+
+	}
+	
+	for (auto it = new_source_first_spike_times_sorted.begin(); it < new_source_first_spike_times_sorted.end(); it++)
+		indicators_connected_to_targets[(*it).second] = true;
+	
+	return 0;
+}*/
 
 int HvcNetwork::wire_polychronous_network_customDelays_iteration(int min_num_neurons_to_connect, double time_to_connect, 
 								double synch_margin, double mean_delay, double sd_delay,
@@ -884,6 +2128,84 @@ std::vector<double> HvcNetwork::sample_axonal_delays_from_lognormal(int N, doubl
 	return delays;
 }
 
+void HvcNetwork::sample_noise_based_on_dend_capacitance(const std::vector<double>& cm,
+				std::vector<double>& mu_soma, std::vector<double>& std_soma, 
+				std::vector<double>& mu_dend, std::vector<double>& std_dend){
+	const std::vector<double> CM_DEND = {1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0};
+	const std::vector<double> STD_DEND = {0.198, 0.233, 0.263, 0.29, 0.315, 0.34, 0.36};
+
+	const double std_soma_const = 0.1;
+	const double mu_soma_const = 0.0;
+	const double mu_dend_const = 0.0;
+
+	assert(N_RA == static_cast<int>(cm.size()));
+
+	mu_soma.resize(cm.size());
+	std_soma.resize(cm.size());
+	mu_dend.resize(cm.size());
+	std_dend.resize(cm.size());
+	
+	std::fill(mu_soma.begin(), mu_soma.end(), mu_soma_const);
+	std::fill(std_soma.begin(), std_soma.end(), std_soma_const);
+	std::fill(mu_dend.begin(), mu_dend.end(), mu_dend_const);
+	
+	double dc = CM_DEND[1] - CM_DEND[0]; // capacitance resolution
+	double c_min = CM_DEND.front();
+	
+	for (int i = 0; i < N_RA; i++){
+		int ind_floor = static_cast<int>(floor((cm[i]-c_min) / dc));
+		int ind_ceil = static_cast<int>(ceil((cm[i]-c_min) / dc));
+		
+		double alpha = (cm[i] - CM_DEND[ind_floor]) / dc;
+		
+		double std_dend_neuron = (1-alpha) * STD_DEND[ind_floor] 
+							+ alpha * STD_DEND[ind_ceil];
+							
+		std_dend[i] = std_dend_neuron;
+	}
+}
+
+
+void HvcNetwork::sample_capacitance_and_integration_times(int N, std::pair<double,double> c_range, 
+						std::vector<double>& capacitance_dend, std::vector<double>& integration_times){
+	const std::vector<double> CM_DEND = {1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 5.0};
+	const std::vector<double> INTEGRATION_TIMES = {5.522652, 5.746652, 5.9594526, 6.1650515, 6.360252, 6.552652, 6.738252, 6.9222517, 7.106651, 7.288252, 7.473452, 7.6578517, 7.8450527, 8.029451, 8.213052, 8.394652, 8.573452, 8.749851, 8.924651, 9.093852, 9.264652, 9.430652, 9.595452, 9.760251, 9.925852, 10.088252, 10.248652, 10.410252, 10.572653, 10.732252, 10.892252, 11.051452, 11.209852, 11.367451, 11.523451, 11.677452, 11.830653, 11.983852, 12.133851, 12.282651, 12.432252};
+
+	double c_min_in = c_range.first;
+	double c_max_in = c_range.second;
+	
+	if (c_max_in > CM_DEND.back()){
+		std::cout << "Max capacitance in sample_integration_times exceeds max in the simulated data!" << std::endl;
+		return;
+	}
+	
+	if (c_min_in < CM_DEND.front()){
+		std::cout << "Min capacitance in sample_integration_times exceeds min in the simulated data!" << std::endl;
+		return;
+	}
+
+	double dc = CM_DEND[1] - CM_DEND[0]; // capacitance resolution
+
+	integration_times.resize(N);
+	capacitance_dend.resize(N);
+	
+	double c_min = CM_DEND.front();
+	
+	for (int i = 0; i < N; i++){
+		double rand_c = c_min_in + noise_generator.random(c_max_in-c_min_in);
+		
+		int ind_floor = static_cast<int>(floor((rand_c-c_min) / dc));
+		int ind_ceil = static_cast<int>(ceil((rand_c-c_min) / dc));
+		
+		double alpha = (rand_c - CM_DEND[ind_floor]) / dc;
+		
+		integration_times[i] = (1-alpha) * INTEGRATION_TIMES[ind_floor] 
+							+ alpha * INTEGRATION_TIMES[ind_ceil];
+							
+		capacitance_dend[i] = rand_c;
+	}
+}
+
 double HvcNetwork::sample_Ge2i()
 {
     return noise_generator.random(Gei_max);
@@ -1006,6 +2328,33 @@ void HvcNetwork::initialize_dynamics()
 
 	//if (MPI_rank == 0)
 	//	std::cout << "Dynamics is initialized!\n" << std::endl; 
+}
+
+void HvcNetwork::set_noise_based_on_dend_capacitance(const std::vector<double>& cm){
+	const std::vector<double> CM_DEND = {1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0};
+	const std::vector<double> std_dend = {0.198, 0.233, 0.263, 0.29, 0.315, 0.34, 0.36};
+
+	double std_soma = 0.1;
+	double mu_soma = 0.0;
+	double mu_dend = 0.0;
+
+	double dc = CM_DEND[1] - CM_DEND[0]; // capacitance resolution
+	
+	double c_min = CM_DEND.front();
+	
+	assert(N_RA_local == static_cast<int>(cm.size()));
+	
+	for (int i = 0; i < N_RA_local; i++){
+		int ind_floor = static_cast<int>(floor((cm[i]-c_min) / dc));
+		int ind_ceil = static_cast<int>(ceil((cm[i]-c_min) / dc));
+		
+		double alpha = (cm[i] - CM_DEND[ind_floor]) / dc;
+		
+		double std_dend_neuron = (1-alpha) * std_dend[ind_floor] 
+							+ alpha * std_dend[ind_ceil];
+							
+		HVCRA_local[i].set_white_noise(mu_soma, std_soma, mu_dend, std_dend_neuron);
+	}
 }
 
 void HvcNetwork::set_noise()
@@ -2369,6 +3718,52 @@ void HvcNetwork::write_experimental_network_to_directory(std::string outputDirec
     this->write_parameters_to_file(filename_parameters.c_str());
 }
 
+void HvcNetwork::write_noise_based_on_dend_capacitance(const std::vector<double>& mu_soma, const std::vector<double>& std_soma, 
+													   const std::vector<double>& mu_dend, const std::vector<double>& std_dend,
+													   const char* filename){
+	std::ofstream out;
+	
+	// open files
+	out.open(filename, std::ios::binary | std::ios::out);
+	
+	assert(N_RA == static_cast<int>(mu_soma.size()));
+	assert(N_RA == static_cast<int>(std_soma.size()));
+	assert(N_RA == static_cast<int>(mu_dend.size()));
+	assert(N_RA == static_cast<int>(std_dend.size()));
+	
+	// write number of neurons
+	out.write(reinterpret_cast<char *>(&N_RA), sizeof(N_RA));
+	
+	for (int i = 0; i < N_RA; i++){
+		out.write(reinterpret_cast<const char *>(&mu_soma[i]), sizeof(double));
+		out.write(reinterpret_cast<const char *>(&std_soma[i]), sizeof(double));
+		out.write(reinterpret_cast<const char *>(&mu_dend[i]), sizeof(double));
+		out.write(reinterpret_cast<const char *>(&std_dend[i]), sizeof(double));
+	}
+	
+	out.close();													
+}
+
+void HvcNetwork::write_capacitance_and_integration_time(const std::vector<double>& c, 
+										const std::vector<double>& it, const char* filename){
+	std::ofstream out;
+	
+	// open files
+	out.open(filename, std::ios::binary | std::ios::out);
+	
+	assert(N_RA == static_cast<int>(c.size()));
+	assert(N_RA == static_cast<int>(it.size()));
+	
+	// write number of neurons
+	out.write(reinterpret_cast<char *>(&N_RA), sizeof(N_RA));
+	
+	for (int i = 0; i < N_RA; i++){
+		out.write(reinterpret_cast<const char *>(&c[i]), sizeof(double));
+		out.write(reinterpret_cast<const char *>(&it[i]), sizeof(double));
+	}
+	out.close();
+}
+
 void HvcNetwork::write_synapses(const std::vector<std::vector<int>>& syn_ID,
 								const std::vector<std::vector<double>>& weights,
 								const std::vector<std::vector<double>>& delays,
@@ -2615,6 +4010,65 @@ void HvcNetwork::prepare_network_for_testing(std::string networkDir, std::string
 	}
 	
 	this->prepare_slaves_for_testing(fileTraining);
+}
+
+void HvcNetwork::read_capacitance(const char* file_capacitance, const char* file_noise){
+	std::vector<double> capacitance_global;
+	std::vector<double> mu_soma_global;
+	std::vector<double> std_soma_global;
+	std::vector<double> mu_dend_global;
+	std::vector<double> std_dend_global;
+	
+	if (MPI_rank == 0){
+		std::ifstream inp;
+			
+		// open files
+		inp.open(file_capacitance, std::ios::binary | std::ios::in);
+		
+		int N;
+		
+		inp.read(reinterpret_cast<char *>(&N), sizeof(N));
+		
+		assert(N == N_RA);
+		
+		capacitance_global.resize(N_RA);
+		double tmp;
+		
+		for (int i = 0; i < N_RA; i++){
+			inp.read(reinterpret_cast<char *>(&capacitance_global[i]), sizeof(double));
+			inp.read(reinterpret_cast<char *>(&tmp), sizeof(double));
+			
+		}
+		inp.close();
+		
+		// sample noise based on dendritic capacitance
+		this->sample_noise_based_on_dend_capacitance(capacitance_global,
+				mu_soma_global, std_soma_global, 
+				mu_dend_global, std_dend_global);
+		
+		this->write_noise_based_on_dend_capacitance(mu_soma_global, std_soma_global, 
+													mu_dend_global, std_dend_global,
+													file_noise);
+	}
+	std::vector<double> capacitance_local;
+	std::vector<double> mu_soma_local;
+	std::vector<double> std_soma_local;
+	std::vector<double> mu_dend_local;
+	std::vector<double> std_dend_local;
+	
+	this->scatter_global_to_local_double(capacitance_global, capacitance_local);
+	this->scatter_global_to_local_double(mu_soma_global, mu_soma_local);
+	this->scatter_global_to_local_double(std_soma_global, std_soma_local);
+	this->scatter_global_to_local_double(mu_dend_global, mu_dend_local);
+	this->scatter_global_to_local_double(std_dend_global, std_dend_local);
+	
+	for (int i = 0; i < N_RA_local; i++){
+		HVCRA_local[i].set_cm_dend(capacitance_local[i]);
+		HVCRA_local[i].set_white_noise(mu_soma_local[i], std_soma_local[i], 
+									   mu_dend_local[i], std_dend_local[i]);
+	}
+		
+	//this->set_noise_based_on_dend_capacitance(capacitance_local);
 }
 
 void HvcNetwork::read_synapses(std::vector<std::vector<int>>& syn_ID,

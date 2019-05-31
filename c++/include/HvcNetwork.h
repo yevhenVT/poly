@@ -21,6 +21,16 @@ public:
     // set functions
     void set_connection_strengths(double gee_max, double gei_max, double gie_max); // set conductance strength for all connections
 	
+	void wire_random_feedforward(int num_output, double mean_delay, double sd_delay,
+											std::string outputDir); // wire a random feedforward network. Neurons
+																	// are ordered according to their putative burst onset order.
+																	// Then num_output connections are send for each neuron to the
+																	// neurons that are supposed to spike later. 
+	
+	void wire_polychronous_network_integrationTimes(int num_outputs, int max_num_inputs,
+			double synch_margin, std::pair<double,double> c_range, std::string outputDir); // wire a polychronous network with zero delays and different integration times
+														 // coming from a distribution of dendritic membrane capacitance
+	
 	void wire_polychronous_network_customDelays(int num_outputs, int max_num_inputs,
 			double synch_margin, double mean_delay, double sd_delay, std::string outputDir); // wire causal network
 																							 // with delay distribution sampled from lognormal distribution with defined mean and standard deviation
@@ -38,7 +48,8 @@ public:
 	void prepare_network_for_testing(std::string networkDir, std::string fileTraining, bool resample); // read network configuration, resample synaptic strengths if needed and distribute among slaves
 		
 	void test_network(int num_trials, double trial_duration, double spread, bool record, std::string outputDirectory, std::string fileSimName); // run multiple simulation of network dynamics
-			
+	
+	void read_capacitance(const char* file_capcitance, const char* file_noise); // read dendritic capacitance from file_capacitance and write neuronal noise to file_noise	
 private:
 	/////////////////
 	// HVC parameters
@@ -178,9 +189,19 @@ private:
     void scatter_connections_RA2RA(); // send HVC(RA) -> HVC(RA) connections from master process to all slaves
     void scatter_connections_betweenRAandI(); // send connections between HVC(RA) and HVC(I) from master process to all slaves
 
+	void scatter_global_to_local_double(const std::vector<double>& global,
+												std::vector<double>& local); // scatter global array from master process (size N_RA)
+																			 // to local arrays on slaves (size N_RA_local each)
     ///////////////////////////
     // causal network functions
     ///////////////////////////
+    int wire_polychronous_network_integrationTimes_iteration(int min_num_neurons_to_connect, double time_to_connect,
+								double synch_margin, int num_outputs, std::vector<int>& num_inputs, int max_num_inputs,
+								std::vector<bool>& indicators_connected_to_targets,
+								std::vector<double>& assigned_burst_labels, std::vector<double>& integration_times,
+								std::set<int>& network_neurons); // an iteration of the wiring of a polychronous network with zero delays
+																 // and different integration times
+    
     int wire_polychronous_network_customDelays_iteration(int min_num_neurons_to_connect, double time_to_connect, 
 								double synch_margin, double mean_delay, double sd_delay,
 								int num_outputs, std::vector<int>& num_inputs, int max_num_inputs,
@@ -200,7 +221,13 @@ private:
     double sample_Gi2e(); // sample synaptic weight from HVC(I) to HVC(RA) neuron
     double sample_Ge2e(); // sample synaptic weight from HVC(RA) to HVC(RA) neuron
     
-   
+	void sample_capacitance_and_integration_times(int N, std::pair<double,double> c_range, 
+						std::vector<double>& capacitance_dend, std::vector<double>& integration_times); // sample dendritic capacitance and as a result integration times for neurons
+    
+    
+    void sample_noise_based_on_dend_capacitance(const std::vector<double>& cm,
+				std::vector<double>& mu_soma, std::vector<double>& std_soma, 
+				std::vector<double>& mu_dend, std::vector<double>& std_dend); // sample neuronal noise strength based on their dendritic capacitance
     /////////////////
     // initialization
     /////////////////
@@ -222,6 +249,7 @@ private:
     void set_noise_parameters(const struct NoiseParameters& noise_params); // set noise parameters
     void set_time_parameters(const struct TimeParameters& time_params); // set time parameters
     
+    void set_noise_based_on_dend_capacitance(const std::vector<double>& cm); // set noise level based on dendritic capacitance
     ///////////
     // dynamics
     ///////////																		
@@ -248,6 +276,13 @@ private:
    
     
     // write to files
+    void write_noise_based_on_dend_capacitance(const std::vector<double>& mu_soma, const std::vector<double>& std_soma, 
+													   const std::vector<double>& mu_dend, const std::vector<double>& std_dend,
+													   const char* filename); // write noise of neurons which was set based on their dendritic capacitance
+    
+    void write_capacitance_and_integration_time(const std::vector<double>& c, 
+										const std::vector<double>& it, const char* filename); // write capacitance and integration times of neurons to a file
+										
     void write_training_neurons(const char* filename); // write training neurons to a file
     
     void write_burst_labels(const std::vector<double>& labels, const char* filename); // write burst labels to file

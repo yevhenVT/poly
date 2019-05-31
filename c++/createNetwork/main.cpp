@@ -7,17 +7,24 @@
 #include <mpi.h>
 
 static void print_usage(){
-	std::cout << "Usage: 2 different types of network can be wired by specifying one of the options below:\n"
+	std::cout << "Usage: 3 different types of network can be wired by specifying one of the options below:\n"
 			  << "--synfire to wire one or more synfire chains\n"
-			  << "--polychronous to wire a polychronous network\n\n"
+			  << "--polychronous to wire a polychronous network\n"
+			  << "--integration_times to wire a polychronous network using distributed integration times\n\n"
 			  
 			  << "Common parameters that have to specified for all networks:\n"
 			  << "-o <output directory>\n"
 			  << "-nra <# of HVC-RA neurons>\n"
 			  << "-nout <# of output connections to other HVC-RA for each HVC-RA>\n"
-			  << "-gee <max synaptic strength for HVC-RA -> HVC-RA connections>\n"
+			  << "-gee <max synaptic strength for HVC-RA -> HVC-RA connections>\n\n"
+		      
+		      << "Common parameters that have to specified for synfire chain and polychronous networks:\n"
 		      << "-md <mean value for axonal conduction delay>\n"
 			  << "-sd <standard deviation of axonal conduction delays>\n\n"
+			  
+			  << "Parameters that have to specified for polychronous network with distributed integration times:\n"
+		      << "-c_max <max dendritic capacitance>\n"
+			  << "-c_min <min dendritic capacitance>\n\n"
 			  
 			  << "User can also define an interneuron population:\n" 
 			  << "-ni <# of HVC-I neurons>\n"
@@ -44,15 +51,16 @@ static void print_usage(){
 
 
 
-static int parse_command_line(int argc, char** argv, int rank, bool& s, bool& p,
+static int parse_command_line(int argc, char** argv, int rank, bool& s, bool& p, bool& it,
 						std::string& outDir, int& Nra, int& Ni, unsigned& seed, int& nout, int& maxnin, int& npsc,
-						double& gee, double& gei, double& gie, double& pei, double& pie, double& sm, double& md, double& sd){
+						double& gee, double& gei, double& gie, double& pei, double& pie, double& sm, double& md, double& sd, std::pair<double,double>& c_range){
 	if (argc > 1){
 		// check the network option and make sure that only one option is selected
 		int num_true_indicators = 0;
        
         if (cmdOptionExist(argv+1, argv+argc, "--synfire")) {s = true; num_true_indicators+= 1;};
         if (cmdOptionExist(argv+1, argv+argc, "--polychronous")) {p = true; num_true_indicators+= 1;};
+        if (cmdOptionExist(argv+1, argv+argc, "--integration_times")) {it = true; num_true_indicators+= 1;};
         
         
         if ( (num_true_indicators == 0) || (num_true_indicators > 1)){
@@ -87,21 +95,23 @@ static int parse_command_line(int argc, char** argv, int rank, bool& s, bool& p,
 			return -1;	
 		}
 
-		if (cmdOptionExist(argv+1, argv+argc, "-md")) md = atof(cmdOptionParser(argv+1, argv+argc, "-md"));
-		else {
-			if (rank == 0){std::cout << "Mean axonal conduction delay for HVC-RA -> HVC-RA -md is missing!\n" <<std::endl; print_usage();}
-			return -1;	
+		if (p || s){
+			if (cmdOptionExist(argv+1, argv+argc, "-md")) md = atof(cmdOptionParser(argv+1, argv+argc, "-md"));
+			else {
+				if (rank == 0){std::cout << "Mean axonal conduction delay for HVC-RA -> HVC-RA -md is missing!\n" <<std::endl; print_usage();}
+				return -1;	
+			}
+			
+			if (cmdOptionExist(argv+1, argv+argc, "-sd")) sd = atof(cmdOptionParser(argv+1, argv+argc, "-sd"));
+			else {
+				if (rank == 0){std::cout << "Std axonal conduction delay for HVC-RA -> HVC-RA -sd is missing!\n" <<std::endl; print_usage();}
+				return -1;	
+			}		
 		}
-		
-		if (cmdOptionExist(argv+1, argv+argc, "-sd")) sd = atof(cmdOptionParser(argv+1, argv+argc, "-sd"));
-		else {
-			if (rank == 0){std::cout << "Std axonal conduction delay for HVC-RA -> HVC-RA -sd is missing!\n" <<std::endl; print_usage();}
-			return -1;	
-		}		
 			
 		// if network is polychronous, read information about max number of input connections and synchronous margin:
 		// num interneurons and strength of connection between HVC-RA and HVC-I
-		if (p){
+		if (p || it){
 			if (cmdOptionExist(argv+1, argv+argc, "-maxnin")) maxnin = atoi(cmdOptionParser(argv+1, argv+argc, "-maxnin"));
 			else {
 				if (rank == 0){std::cout << "Max number of input for HVC-RA -maxnin is missing!\n" <<std::endl; print_usage();}
@@ -117,12 +127,27 @@ static int parse_command_line(int argc, char** argv, int rank, bool& s, bool& p,
 		
 		// if network is synfire chain, read the number of synfire chains to wire
 		if (s){
-			if (cmdOptionExist(argv+1, argv+argc, "-npsc")) npsc = atof(cmdOptionParser(argv+1, argv+argc, "-npsc"));
+			if (cmdOptionExist(argv+1, argv+argc, "-npsc")) npsc = atoi(cmdOptionParser(argv+1, argv+argc, "-npsc"));
 			else {
 				if (rank == 0){std::cout << "Number of parallel chains -npsc is missing!\n" <<std::endl; print_usage();}
 				return -1;	
 			}
 		}
+		
+		if (it){
+			if (cmdOptionExist(argv+1, argv+argc, "-c_max")) c_range.second = atof(cmdOptionParser(argv+1, argv+argc, "-c_max"));
+			else {
+				if (rank == 0){std::cout << "max dendritic capacitance -c_max is missing!\n" <<std::endl; print_usage();}
+				return -1;	
+			}
+			
+			if (cmdOptionExist(argv+1, argv+argc, "-c_min")) c_range.first = atof(cmdOptionParser(argv+1, argv+argc, "-c_min"));
+			else {
+				if (rank == 0){std::cout << "min dendritic capacitance -c_min is missing!\n" <<std::endl; print_usage();}
+				return -1;	
+			}
+		}
+		
 		
 		// num interneurons and strength of connection between HVC-RA and HVC-I
 		if (cmdOptionExist(argv+1, argv+argc, "-ni")) Ni = atoi(cmdOptionParser(argv+1, argv+argc, "-ni"));		
@@ -197,13 +222,17 @@ int main(int argc, char** argv)
 	
 	bool synfire = false; // indicator for sampling one or more synfire chains not embedded into space
 	bool polychronous = false; // indicator for sampling polychronous network not embedded into space
+	bool integration_times = false; // indicator for sampling polychronous network with zero delays and 
+									// distributed neuronal integration times
+	
+	std::pair<double, double> c_range; // range of dendritic capacitance
 	
 	unsigned seed = 1991; // seed for random number generators
 	
 	
-	if (parse_command_line(argc, argv, rank, synfire, polychronous,
+	if (parse_command_line(argc, argv, rank, synfire, polychronous, integration_times, 
 						outputDirectory, N_RA, N_I, seed, num_output, max_num_inputs, num_parallel_chains,
-						Gee_max, Gei_max, Gie_max, pei, pie, synchronous_window, mean_delay, sd_delay) < 0){
+						Gee_max, Gei_max, Gie_max, pei, pie, synchronous_window, mean_delay, sd_delay, c_range) < 0){
 		MPI_Finalize();
 		return 0;
 	}
@@ -258,7 +287,20 @@ int main(int argc, char** argv)
 		
 		hvc.prepare_network_for_polychronous_wiring(outputDirectory + "training_neurons.bin");
 		hvc.wire_polychronous_network_customDelays(num_output, max_num_inputs, synchronous_window, mean_delay, sd_delay, outputDirectory);
-			
+	}
+	
+	if (integration_times){
+		if (rank == 0){
+			write_training_neurons(num_output, outputDirectory);
+			std::cout << "\nSampling polychronous network with integration times\n"
+					  << "Synchronous window: " << synchronous_window << " ms\n"
+					  << "Min dendritic capacitance: " << c_range.first << " micro F / cm^2\n"
+					  << "Max dendritic capacitance: " << c_range.second << " micro F / cm^2" << std::endl;
+		}
+		
+		hvc.prepare_network_for_polychronous_wiring(outputDirectory + "training_neurons.bin");
+		hvc.wire_polychronous_network_integrationTimes(num_output, max_num_inputs, synchronous_window, c_range, outputDirectory);	
+		
 	}
 	
 	MPI_Finalize();

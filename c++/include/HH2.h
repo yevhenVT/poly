@@ -39,6 +39,7 @@ public:
     double get_Iexc(){return -_Vd * _Gexc_d;}; // get excitatory current
     
     // set functions
+    void set_cm_dend(double c){cm_d = c;};
 	void set_Ei(double E); // set GABA reverse potential
 	void reset_time(); // reset time of neuron to zero
 	
@@ -78,7 +79,8 @@ protected:
 	
 	// model parameters
 
-	const static double cm;	//	membrane capacitance
+	double cm_d;	// membrane capacitance of dendritic compartment
+	const static double cm_s;	// membrane capacitance of somatic compartment
 	const static double Rc;	// resistance of coupling between soma and dendrite
 	const static double As;	//	soma's membrane area
 	const static double GsL;	//	soma's leak conductance
