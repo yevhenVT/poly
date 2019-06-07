@@ -100,15 +100,15 @@ def call_noise_dend_capacitance_batch_model(c, outDir):
     
     
 if __name__ == "__main__":
-    #outDir = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/sm6.0/"
+    outDir = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/sm8.0/"
 
-    #cm = np.arange(1.0, 5.1, 0.1)
+    cm = np.arange(0.5, 10.1, 0.1)
+    print cm
+    call_input_response_batch(cm, outDir)
     
-    #call_input_response(cm, outDir)
-    
-    c = 0.25
-    filename = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/smallCm/cm0.25.bin"
-    call_input_response(c, filename)
+    #c = 0.4
+    #filename = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/smallCmSmallA/cm0.4_dt0.01.bin"
+    #call_input_response(c, filename)
     
     #outDir = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/noise_s0.1_d0.2/"
 

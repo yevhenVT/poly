@@ -105,11 +105,27 @@ def plot_capacitance_and_integration_time_model(filename):
     capacitance_dend = capacitance_dend[sorted_ind]
     integration_times = integration_times[sorted_ind]
        
-
+    
+    print "Mean integration time: ",np.mean(integration_times)
+    print "Std integration time: ",np.std(integration_times)
+    print "Mean capacitance: ",np.mean(capacitance_dend)
+    print "Std capacitance: ",np.std(capacitance_dend)
+    
     plt.figure()
     plt.plot(capacitance_dend, integration_times, '-o')
     plt.xlabel('Capacitance dendrite ($\mu F/ cm^2$)')
     plt.ylabel('Putative integration time (ms)')
+    
+    plt.figure()
+    plt.hist(capacitance_dend, bins=100)
+    plt.xlabel('Capacitance dendrite ($\mu F/ cm^2$)')
+    plt.ylabel('Count')
+    
+    plt.figure()
+    plt.hist(integration_times, bins=100)
+    plt.xlabel('integration time (ms)')
+    plt.ylabel('Count')
+    
     plt.show()
 
 def read_hh2(filename):
@@ -146,10 +162,18 @@ def estimate_noise(filename):
     """
     Calculate the amplitude of membrane potential fluctuations
     """
-    _, Vs, _, _, _, _, _ = read_hh2(filename)
+    t, Vs, _, _, _, _, _ = read_hh2(filename)
     
     print "mean V = ",np.mean(Vs)
     print "std V = ",np.std(Vs)
+    
+    fired = np.zeros_like(Vs, np.int8)
+    fired[np.where(Vs >= 0)] = 1
+    
+    num_spikes = len(np.where(np.diff(fired) == 1)[0])
+    
+    print num_spikes
+    print "Spike frequency = ",float(num_spikes) * 1000.0 / t[-1]
     
 def plot_noise_vs_dend_capacitance_model(file_noise, file_capacitance):
     """
@@ -221,11 +245,41 @@ def plot_noise_vs_dend_capacitance(dirname):
     plt.show()
         
             
-        
-      
+def plot_capacitance_tuning_curve(dirname):
+    """
+    Plot neuronal response properties with different dendritic capacitance
+    """
+    c_d, mean_burst_onset_times, std_burst_onset_times, \
+            mean_num_spikes_in_burst, std_num_spikes_in_burst = combine_capacitance_results(dirname)
+    
+    plt.figure()
+    plt.plot(c_d, mean_burst_onset_times, '-o')
+    plt.xlabel('Capacitance dendrite ($\mu F/ cm^2$)')
+    plt.ylabel('Integration time (ms)')
+    
+    plt.figure()
+    plt.plot(c_d, std_burst_onset_times, '-o')
+    plt.xlabel('Capacitance dendrite ($\mu F/ cm^2$)')
+    plt.ylabel('Std integration time (ms)')
+    
+    plt.figure()
+    plt.plot(c_d, mean_num_spikes_in_burst, '-o')
+    plt.xlabel('Capacitance dendrite ($\mu F/ cm^2$)')
+    plt.ylabel('Mean # spikes in burst')
+    
+    plt.figure()
+    plt.plot(c_d, std_num_spikes_in_burst, '-o')
+    plt.xlabel('Capacitance dendrite ($\mu F/ cm^2$)')
+    plt.ylabel('Std # spikes in burst')
+    
+    plt.show()
+   
 if __name__ == "__main__":
 # =============================================================================
-#     filename = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/sm1.0/cm3.8.bin"
+#     ### Response to input at different dendritic capacitance ###
+#     #filename = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/sm1.0/cm3.8.bin"
+#     #filename = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/smallCmSmallA/cm0.5_dt0.01.bin"
+#     filename = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/sm6.0/cm0.5.bin"
 #     
 #     num_spikes_in_trial, burst_onset_times = read_results(filename)
 #     
@@ -241,7 +295,8 @@ if __name__ == "__main__":
 #     print "Mean burst onset time: ",np.mean(burst_onset_times)
 #     print "Std burst onset time: ",np.std(burst_onset_times)
 #     
-#     dirname = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/sm1.0/"
+#     ### comparison of integration time vs dendritic capacitance graphs for different width of synchronization windows
+#     dirname = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/sm8.0/"
 #     
 #     c_d, mean_burst_onset_times, std_burst_onset_times, \
 #             mean_num_spikes_in_burst, std_num_spikes_in_burst = combine_capacitance_results(dirname)
@@ -257,7 +312,7 @@ if __name__ == "__main__":
 #     
 #     
 #     plt.figure()
-#     plt.plot(c_d, mean_burst_onset_times, '-o', label='sm 1.0')
+#     plt.plot(c_d, mean_burst_onset_times, '-o', label='sm 8.0')
 #     plt.plot(c_d_2, mean_burst_onset_times_2, '-o', label='sm 6.0')
 #     
 #     #plt.plot(c_d, intercept + slope*c_d, 'r')
@@ -285,10 +340,16 @@ if __name__ == "__main__":
 #     plt.xlabel('Capacitance dendrite ($\mu F/ cm^2$)')
 #     plt.ylabel('Std # spikes in burst')
 #     plt.legend()
-#     #plot_capacitance_and_integration_time_model("/home/eugene/Programming/data/mlong/integrationConst/poly/cm_dend_and_integration_times.bin")
 #     
-#     plt.show()
 # =============================================================================
+    
+    
+    #plot_capacitance_tuning_curve("/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/sm6.0/")
+    
+    plot_capacitance_and_integration_time_model("/home/eugene/Programming/data/mlong/integrationConst/poly15/cm_dend_and_integration_times.bin")
+    
+    #plt.show()
+   
     #dirname = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/noise_s0.1_d0.2/"    
     #plot_noise_vs_dend_capacitance(dirname)
 
@@ -312,6 +373,6 @@ if __name__ == "__main__":
     #print burst_onset_times
     
     
-    plot_capacitance_and_integration_time_model("/home/eugene/Programming/data/mlong/integrationConst/poly3/cm_dend_and_integration_times.bin")
+    #plot_capacitance_and_integration_time_model("/home/eugene/Programming/data/mlong/integrationConst/poly3/cm_dend_and_integration_times.bin")
 #     
-    
+    #estimate_noise("/home/eugene/Programming/data/mlong/noise/noiseCheckDebrabandNew/noise_s0.30_d0.0_dt0.02.bin")

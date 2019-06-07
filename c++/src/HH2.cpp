@@ -22,14 +22,14 @@ const double HH2::lambda_inh = 100.0;
 // neuron model parameters
 const double HH2::cm_s = 1.0; // capacitance of somatic membrane in micro Farad / cm^2
 const double HH2::Rc = 130; // original 55; myNeuronModel 130; newModel 200 ; now 1; coupling between dendrite and soma in MOhms 
-const double HH2::As = 5000; // soma surface area in micro meters squared
+const double HH2::As = 0.5; // soma surface area original: 5000 in micro meters squared, now: 0.5 in 10^-4 cm^2
 const double HH2::GsL = 0.05; // original 0.1; myNeuronModel 0.05; newModel 0.1
 const double HH2::GsNa = 60; // original 60; newModel 80; 
 const double HH2::GsK = 8; // original 8; newModel 4;
 const double HH2::EsL = -80; // original -80
 const double HH2::EsNa = 55;
 const double HH2::EsK = -90;
-const double HH2::Ad = 10000; // original 10000; now 1000
+const double HH2::Ad = 1; // soma surface area original: 10000 in micro meters squared, now: 1 in 10^-4 cm^2
 const double HH2::GdL = 0.1; // original 0.1 
 const double HH2::GdCa = 55; // original 55; newModel 40
 const double HH2::GdCaK = 150; // original 150 
@@ -124,7 +124,6 @@ void HH2::set_poisson_noise()
 	this->initialize_poisson_noise(_noise_inh_soma, lambda_inh);
 	this->initialize_poisson_noise(_noise_exc_dend, lambda_exc);
 	this->initialize_poisson_noise(_noise_inh_dend, lambda_inh);
- 
 }
 
 void HH2::set_no_poisson_noise(){_poisson_noise = false;}
@@ -353,7 +352,6 @@ void HH2::write_buffers_full()
 	}
 	
 	output.close();
-	
 }
 
 void HH2::raiseE(double G)
@@ -577,9 +575,14 @@ void HH2::Debraband_step()
 	double J1d = point_distribution[ind1d];
 	double J2d = point_distribution[ind2d];
 	
+	// with A in micro meters ^2
+	//H1Vs = _Vs + sqrt(_timestep) * _sigma_soma * (-0.01844540496323970 * J1s - 0.1866426386543421 * J2s) * 100000 / (As * cm_s);
+	//H1Vd = _Vd + sqrt(_timestep) * _sigma_dend * (-0.01844540496323970 * J1d - 0.1866426386543421 * J2d) * 100000 / (Ad * cm_d);
 	
-	H1Vs = _Vs + sqrt(_timestep) * _sigma_soma * (-0.01844540496323970 * J1s - 0.1866426386543421 * J2s) * 100000 / (As * cm_s);
-	H1Vd = _Vd + sqrt(_timestep) * _sigma_dend * (-0.01844540496323970 * J1d - 0.1866426386543421 * J2d) * 100000 / (Ad * cm_d);
+	// with A in 10^-4 cm^2
+	H1Vs = _Vs + sqrt(_timestep) * _sigma_soma * (-0.01844540496323970 * J1s - 0.1866426386543421 * J2s) * 10 / (As * cm_s);
+	H1Vd = _Vd + sqrt(_timestep) * _sigma_dend * (-0.01844540496323970 * J1d - 0.1866426386543421 * J2d) * 10 / (Ad * cm_d);
+
 	H1Ca = _Ca;
 	H1n  = _n;
 	H1h  = _h;
@@ -594,8 +597,14 @@ void HH2::Debraband_step()
 	a1c = kc(H1Vd, H1c);
 	a1Ca = kCa(H1Vd, H1r, H1Ca);
 
-	H2Vs = _Vs + _timestep * a1Vs + sqrt(_timestep) * _sigma_soma * (0.8017012756521233 * J1s - 0.8575745885712401 * J2s) * 100000 / (As * cm_s);
-	H2Vd = _Vd + _timestep * a1Vd + sqrt(_timestep) * _sigma_dend * (0.8017012756521233 * J1d - 0.8575745885712401 * J2d) * 100000 / (Ad * cm_d);
+	// with A in micro meters ^2
+	//H2Vs = _Vs + _timestep * a1Vs + sqrt(_timestep) * _sigma_soma * (0.8017012756521233 * J1s - 0.8575745885712401 * J2s) * 100000 / (As * cm_s);
+	//H2Vd = _Vd + _timestep * a1Vd + sqrt(_timestep) * _sigma_dend * (0.8017012756521233 * J1d - 0.8575745885712401 * J2d) * 100000 / (Ad * cm_d);
+	
+	// with A in 10^-4 cm^2
+	H2Vs = _Vs + _timestep * a1Vs + sqrt(_timestep) * _sigma_soma * (0.8017012756521233 * J1s - 0.8575745885712401 * J2s) * 10 / (As * cm_s);
+	H2Vd = _Vd + _timestep * a1Vd + sqrt(_timestep) * _sigma_dend * (0.8017012756521233 * J1d - 0.8575745885712401 * J2d) * 10 / (Ad * cm_d);
+	
 	H2Ca = _Ca + _timestep * a1Ca;
 	H2n =  _n  + _timestep * a1n;
 	H2h =  _h  + _timestep * a1h;
@@ -610,8 +619,14 @@ void HH2::Debraband_step()
 	a2c = kc(H2Vd, H2c);
 	a2Ca = kCa(H2Vd, H2r, H2Ca);
 
-	H3Vs = _Vs + _timestep * (3 * a1Vs + a2Vs) / 8 + sqrt(_timestep) * _sigma_soma * (0.5092227024816198 * J1s - 0.4723392695015512 * J2s) * 100000 / (As * cm_s);
-	H3Vd = _Vd + _timestep * (3 * a1Vd + a2Vd) / 8 + sqrt(_timestep) * _sigma_dend * (0.5092227024816198 * J1d - 0.4723392695015512 * J2d) * 100000 / (Ad * cm_d);
+	// with A in micro meters ^2
+	//H3Vs = _Vs + _timestep * (3 * a1Vs + a2Vs) / 8 + sqrt(_timestep) * _sigma_soma * (0.5092227024816198 * J1s - 0.4723392695015512 * J2s) * 100000 / (As * cm_s);
+	//H3Vd = _Vd + _timestep * (3 * a1Vd + a2Vd) / 8 + sqrt(_timestep) * _sigma_dend * (0.5092227024816198 * J1d - 0.4723392695015512 * J2d) * 100000 / (Ad * cm_d);
+	
+	// with A in 10^-4 cm^2
+	H3Vs = _Vs + _timestep * (3 * a1Vs + a2Vs) / 8 + sqrt(_timestep) * _sigma_soma * (0.5092227024816198 * J1s - 0.4723392695015512 * J2s) * 10 / (As * cm_s);
+	H3Vd = _Vd + _timestep * (3 * a1Vd + a2Vd) / 8 + sqrt(_timestep) * _sigma_dend * (0.5092227024816198 * J1d - 0.4723392695015512 * J2d) * 10 / (Ad * cm_d);
+	
 	H3Ca = _Ca + _timestep * (3 * a1Ca + a2Ca) / 8;
 	H3n  = _n  + _timestep * (3 * a1n + a2n) / 8;
 	H3h  = _h  + _timestep * (3 * a1h + a2h) / 8;
@@ -626,11 +641,20 @@ void HH2::Debraband_step()
 	a3c = kc(H3Vd, H3c);
 	a3Ca = kCa(H3Vd, H3r, H3Ca);
 
+	// with A in micro meters ^2
+	//H4Vs = _Vs + _timestep * (-0.4526683126055039 * a1Vs - 0.4842227708685013 * a2Vs + 1.9368910834740051 * a3Vs)
+	//	 + sqrt(_timestep) * _sigma_soma * (0.9758794209767762 * J1s + 0.3060354860326548 * J2s) * 100000 / (As * cm_s);
+	
+	//H4Vd = _Vd + _timestep * (-0.4526683126055039 * a1Vd - 0.4842227708685013 * a2Vd + 1.9368910834740051 * a3Vd)
+	//	 + sqrt(_timestep) * _sigma_dend * (0.9758794209767762 * J1d + 0.3060354860326548 * J2d) * 100000 / (Ad * cm_d);
+
+	// with A in 10^-4 cm^2
 	H4Vs = _Vs + _timestep * (-0.4526683126055039 * a1Vs - 0.4842227708685013 * a2Vs + 1.9368910834740051 * a3Vs)
-		 + sqrt(_timestep) * _sigma_soma * (0.9758794209767762 * J1s + 0.3060354860326548 * J2s) * 100000 / (As * cm_s);
+		 + sqrt(_timestep) * _sigma_soma * (0.9758794209767762 * J1s + 0.3060354860326548 * J2s) * 10 / (As * cm_s);
 	
 	H4Vd = _Vd + _timestep * (-0.4526683126055039 * a1Vd - 0.4842227708685013 * a2Vd + 1.9368910834740051 * a3Vd)
-		 + sqrt(_timestep) * _sigma_dend * (0.9758794209767762 * J1d + 0.3060354860326548 * J2d) * 100000 / (Ad * cm_d);
+		 + sqrt(_timestep) * _sigma_dend * (0.9758794209767762 * J1d + 0.3060354860326548 * J2d) * 10 / (Ad * cm_d);
+
 
 	H4Ca = _Ca + _timestep * (-0.4526683126055039 * a1Ca - 0.4842227708685013 * a2Ca + 1.9368910834740051 * a3Ca);
 	H4n  = _n  + _timestep * (-0.4526683126055039 * a1n - 0.4842227708685013 * a2n + 1.9368910834740051 * a3n);
@@ -646,11 +670,19 @@ void HH2::Debraband_step()
 	a4c = kc(H4Vd, H4c);
 	a4Ca = kCa(H4Vd, H4r, H4Ca);
 
+	// with A in micro meters ^2
+	//_Vs = _Vs + _timestep * (a1Vs / 6 - 0.005430430675258792 * a2Vs + 2 * a3Vs / 3 + 0.1720970973419255 * a4Vs)
+	//			  + sqrt(_timestep) * _sigma_soma * J1s  * 100000 / (As * cm_s);
+	
+	//_Vd = _Vd + _timestep * (a1Vd / 6 - 0.005430430675258792 * a2Vd + 2 * a3Vd / 3 + 0.1720970973419255 * a4Vd)
+	//			  + sqrt(_timestep) * _sigma_dend * J1d * 100000 / (Ad * cm_d);
+	
+	// with A in 10^-4 cm^2
 	_Vs = _Vs + _timestep * (a1Vs / 6 - 0.005430430675258792 * a2Vs + 2 * a3Vs / 3 + 0.1720970973419255 * a4Vs)
-				  + sqrt(_timestep) * _sigma_soma * J1s  * 100000 / (As * cm_s);
+				  + sqrt(_timestep) * _sigma_soma * J1s  * 10 / (As * cm_s);
 	
 	_Vd = _Vd + _timestep * (a1Vd / 6 - 0.005430430675258792 * a2Vd + 2 * a3Vd / 3 + 0.1720970973419255 * a4Vd)
-				  + sqrt(_timestep) * _sigma_dend * J1d * 100000 / (Ad * cm_d);
+				  + sqrt(_timestep) * _sigma_dend * J1d * 10 / (Ad * cm_d);
 	
 	_Ca = _Ca + _timestep * (a1Ca / 6 - 0.005430430675258792 * a2Ca + 2 * a3Ca / 3 + 0.1720970973419255 * a4Ca);
 	_n  = _n  + _timestep * (a1n / 6 - 0.005430430675258792 * a2n + 2 * a3n / 3 + 0.1720970973419255 * a4n);
@@ -789,16 +821,26 @@ double HH2::kVs(double vs, double vd, double n, double h, double t)
 
 	m3 = mInf(vs) * mInf(vs) * mInf(vs);
 	n4 = n * n * n * n;
+	// with A in micro meters ^2
+	//return (-GsL * (vs - EsL) - GsNa * m3 * h * (vs - EsNa) - GsK * n4 * (vs - EsK)
+	//	 - Gi_s(t) * (vs - _Egaba) - Ge_s(t) * vs + 100000 * (IsExt(t) + _mu_soma) / As + 100000 * (vd - vs) / (Rc * As)) / cm_s;
+	
+	// with A in 10^-4 cm^2
 	return (-GsL * (vs - EsL) - GsNa * m3 * h * (vs - EsNa) - GsK * n4 * (vs - EsK)
-		 - Gi_s(t) * (vs - _Egaba) - Ge_s(t) * vs + 100000 * (IsExt(t) + _mu_soma) / As + 100000 * (vd - vs) / (Rc * As)) / cm_s;
+		 - Gi_s(t) * (vs - _Egaba) - Ge_s(t) * vs + 10 * (IsExt(t) + _mu_soma) / As + 10 * (vd - vs) / (Rc * As)) / cm_s;
 }
 double HH2::kVd(double vs, double vd, double r, double c, double ca, double t)
 {
 	double r2;
 
 	r2 = r * r;
+	// with A in micro meters ^2
+	//return (-GdL * (vd - EdL) - GdCa * r2 * (vd - EdCa) - GdCaK * (vd - EdK) * c / (1 + 6 / ca)
+	//	- Ge_d(t) * vd - Gi_d(t) * (vd - _Egaba) + 100000 * (IdExt(t) + _mu_dend) / Ad + 100000 * (vs - vd) / (Rc * Ad)) / cm_d;
+	
+	// with A in 10^-4 cm^2
 	return (-GdL * (vd - EdL) - GdCa * r2 * (vd - EdCa) - GdCaK * (vd - EdK) * c / (1 + 6 / ca)
-		- Ge_d(t) * vd - Gi_d(t) * (vd - _Egaba) + 100000 * (IdExt(t) + _mu_dend) / Ad + 100000 * (vs - vd) / (Rc * Ad)) / cm_d;
+		- Ge_d(t) * vd - Gi_d(t) * (vd - _Egaba) + 10 * (IdExt(t) + _mu_dend) / Ad + 10 * (vs - vd) / (Rc * Ad)) / cm_d;
 }
 
 double HH2::kn(double vs, double n){return (HH2::nInf(vs) - n) / HH2::tauN(vs);}

@@ -23,7 +23,7 @@ def plot_spikes(duration, filename):
     
     spike_times = sorted(spike_times_raw)
     spike_times = [[spike - spike_times[0][0] for spike in spikes] for spikes in spike_times]
-    
+    print spike_times[0]
     
     f = plt.figure()
     ax1 = f.add_subplot(111)

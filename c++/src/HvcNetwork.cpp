@@ -17,7 +17,7 @@ using namespace std::placeholders;
 const double HvcNetwork::WAITING_TIME = 100.0; // waiting time in ms before current injection to training neurons
 const double HvcNetwork::CONDUCTANCE_PULSE = 3.0; // conductance pulse delivered to training neurons
 
-const double HvcNetwork::TIMESTEP = 0.02; // time step for dynamics in ms
+const double HvcNetwork::TIMESTEP = 0.01; // time step for dynamics in ms
 const double HvcNetwork::NETWORK_UPDATE_FREQUENCY = 0.1; // how often network state should be updated in ms
 
 const double HvcNetwork::WHITE_NOISE_MEAN_SOMA = 0.0; // dc component of white noise to soma
@@ -171,8 +171,8 @@ void HvcNetwork::scatter_global_to_local_double(const std::vector<double>& globa
 	delete[] displs;
 }
 
-void HvcNetwork::wire_polychronous_network_integrationTimes(int num_outputs, int max_num_inputs,
-			double synch_margin, std::pair<double, double> c_range, std::string outputDir)
+void HvcNetwork::wire_polychronous_network_integrationTimes_uniform(int num_outputs, int max_num_inputs,
+			double synch_margin, std::pair<double, double> int_range, std::string outputDir)
 {
 	std::set<int> network_neurons; // connected HVC-RA neurons that are supposed to burst
 	std::vector<double> assigned_burst_labels; // array which stores assigned burst labels for added neurons
@@ -190,9 +190,9 @@ void HvcNetwork::wire_polychronous_network_integrationTimes(int num_outputs, int
 		std::fill(assigned_burst_labels.begin(), assigned_burst_labels.end(), -1.0);		
 
 		
-		this->sample_capacitance_and_integration_times(N_RA, c_range, capacitance_dend_global, integration_times);
+		this->sample_capacitance_and_integration_times_uniform(N_RA, int_range, capacitance_dend_global, integration_times);
 		
-		// keep dendritic capacitance of training neurons at original value
+		// keep dendritic capacitance of training neurons at mean value
 		// to achieve synchronous spiking of training neurons	
 		double mean_capacitance = std::accumulate(capacitance_dend_global.begin(), capacitance_dend_global.end(), 0.0) / static_cast<double>(N_RA);
 		double mean_integration_time = std::accumulate(integration_times.begin(), integration_times.end(), 0.0) / static_cast<double>(N_RA);
@@ -368,6 +368,264 @@ void HvcNetwork::wire_polychronous_network_integrationTimes(int num_outputs, int
 	}
 }
 
+void HvcNetwork::wire_polychronous_network_integrationTimes_lognormal(int num_outputs, int max_num_inputs,
+			double synch_margin, std::pair<double,double> int_range, double int_mean, double int_std, std::string outputDir)
+{
+	std::set<int> network_neurons; // connected HVC-RA neurons that are supposed to burst
+	std::vector<double> assigned_burst_labels; // array which stores assigned burst labels for added neurons
+	std::vector<double> integration_times; // array which stores integration times of neurons in the network
+	std::vector<double> capacitance_dend_local; // local array which stores integration times of neurons in the network
+	std::vector<double> capacitance_dend_global; // global array which stores integration times of neurons in the network
+	
+	std::vector<bool> indicators_neuron_connected; // indicator that output connections were sampled for this HVC-RA
+	std::vector<int> num_inputs; // number of input connections for neurons
+		
+	if (MPI_rank == 0)
+	{
+		assigned_burst_labels.resize(N_RA);
+		
+		std::fill(assigned_burst_labels.begin(), assigned_burst_labels.end(), -1.0);		
+
+		
+		this->sample_capacitance_and_integration_times_lognormal(N_RA, int_range, int_mean, int_std, capacitance_dend_global, integration_times);
+		
+		// keep dendritic capacitance of training neurons at mean value
+		// to achieve synchronous spiking of training neurons	
+		double mean_capacitance = std::accumulate(capacitance_dend_global.begin(), capacitance_dend_global.end(), 0.0) / static_cast<double>(N_RA);
+		double mean_integration_time = std::accumulate(integration_times.begin(), integration_times.end(), 0.0) / static_cast<double>(N_RA);
+		
+		for (size_t i = 0; i < training_neurons.size(); i++){
+			network_neurons.insert(training_neurons[i]);
+			capacitance_dend_global[training_neurons[i]] = mean_capacitance;
+			integration_times[training_neurons[i]] = mean_integration_time;
+		}
+			
+		indicators_neuron_connected.resize(N_RA);
+		num_inputs.resize(N_RA);
+		
+		std::fill(indicators_neuron_connected.begin(), indicators_neuron_connected.end(), false);
+		std::fill(num_inputs.begin(), num_inputs.end(), 0);	
+		//this->write_training_neurons((outputDir + "training_neurons.bin").c_str());
+		//std::cout << "Global array\n"
+		//		  << "Training neurons:\n";
+		//for (int i = 0; i < N_RA_sizes[0] + N_RA_sizes[1]; i++){
+		//	if (i == N_RA_sizes[0]) std::cout << "Rank 1\n";
+		//	std::cout << capacitance_dend_global[i] << ", " << integration_times[i] << std::endl;
+		//}
+		
+		this->write_capacitance_and_integration_time(capacitance_dend_global, 
+										integration_times, (outputDir + "cm_dend_and_integration_times.bin").c_str());
+	
+	}
+	
+	// send dendritic capacitance to slaves
+	this->scatter_global_to_local_double(capacitance_dend_global, capacitance_dend_local);
+	
+	//if (MPI_rank == 1) std::cout << "Local array\n";
+		
+	// set dendritic capacitance for neurons
+	for (int i = 0; i < N_RA_local; i++){
+		HVCRA_local[i].set_cm_dend(capacitance_dend_local[i]);
+		//if (MPI_rank == 1)
+		//	std::cout << capacitance_dend_local[i] << std::endl;
+	}
+	
+	int iter = 1;
+	
+	double trial_extend = 20.0; // in ms; trial duration is extended by trial_extend value
+	double stop_time; // trial duration
+	double max_burst_time; // maximum burst time of HVC-RA neuron in the network
+	
+	int min_num_neurons_to_connect = 1;
+	double time_to_connect = 2.0;
+	
+	int continue_growth = 1;
+	int save_iter = 1;
+	
+	// make first iteration to get spike timing of training neurons
+	stop_time = WAITING_TIME + trial_extend;
+	
+	this->run_polychronous_network(stop_time);
+	
+	// change burst labels of training neurons
+	if (MPI_rank == 0){
+		for (int i = 0; i < N_TR; i++)
+			if ( !spikes_in_trial_soma_global[training_neurons[i]].empty() )
+				assigned_burst_labels[training_neurons[i]] = spikes_in_trial_soma_global[training_neurons[i]][0];
+	
+		max_burst_time = *std::max_element(assigned_burst_labels.begin(), assigned_burst_labels.end());
+	}
+	
+	this->randomize_after_trial();
+	
+	MPI_Bcast(&max_burst_time, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+	
+	stop_time = max_burst_time + trial_extend;
+	
+	while (continue_growth == 1)
+	{
+		if (MPI_rank == 0)
+			std::cout << "Iteration " << iter << "\n" << std::endl;
+			
+		this->run_polychronous_network(stop_time);
+		
+		if (MPI_rank == 0)
+		{	
+			// print burst labels
+			for (int j = 0; j < N_RA; j++)
+			{
+				if ( spikes_in_trial_soma_global[j].size() > 0 )
+					std::cout << "Neuron " << j << " burst time = " << spikes_in_trial_soma_global[j][0] << " burst label = " << assigned_burst_labels[j] << "\n";
+					
+			}
+			
+					
+			std::cout << std::endl;
+			
+											  
+			if (this->wire_polychronous_network_integrationTimes_iteration(min_num_neurons_to_connect, time_to_connect,
+								synch_margin, num_outputs, num_inputs, max_num_inputs,
+								indicators_neuron_connected,
+								assigned_burst_labels, integration_times,
+								network_neurons) < 0 )
+				continue_growth = 0;
+			
+			
+			if ( network_neurons.size() / 1000 == save_iter )
+			{	
+
+				
+				std::string fileSimName = "e" + std::to_string(Gee_max) + "_i" + std::to_string(Gie_max) + "_";
+			
+				this->write_dend_spike_times((outputDir + fileSimName + "dendSpikes.bin").c_str());
+				this->write_soma_spike_times((outputDir + fileSimName + "somaSpikes.bin").c_str());
+			
+				this->write_interneuron_spike_times((outputDir + fileSimName + "interneuron_spikes.bin").c_str());
+				
+				this->write_experimental_network_to_directory(outputDir);
+				
+				std::string fileBurstLabels = outputDir + "burstLabels.bin";
+	
+				this->write_burst_labels(assigned_burst_labels, fileBurstLabels.c_str());
+				save_iter += 1;
+				
+			}
+			
+			///////////////////////////////////////
+			// trial duration for sampled labels //
+			///////////////////////////////////////
+			max_burst_time = *std::max_element(assigned_burst_labels.begin(), assigned_burst_labels.end());
+			
+			
+			
+			std::cout << "Connected network size = " << network_neurons.size() << "\n" << std::endl;
+			std::cout << "Max burst time = " << max_burst_time << "\n" << std::endl;
+			
+			if (network_neurons.size() >= N_RA)
+				continue_growth = 0;
+		}
+		
+		this->randomize_after_trial();
+		
+		// send new connections and axonal delays to slaves
+		this->scatter_connections_RA2RA();
+		
+		MPI_Bcast(&continue_growth, 1, MPI_INT, 0, MPI_COMM_WORLD);
+		MPI_Bcast(&max_burst_time, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+		
+		stop_time = max_burst_time + trial_extend;
+
+		
+		iter += 1;
+	}
+	
+	stop_time = max_burst_time + trial_extend;
+
+	std::string fileSimName = "e" + std::to_string(Gee_max) + "_i" + std::to_string(Gie_max) + "_";
+
+		
+	this->run_polychronous_network(stop_time);
+		
+	if (MPI_rank == 0) 
+	{
+		//~ std::cout << "Network neurons:\n";
+		//~ 
+		//~ for (auto it = network_neurons.begin(); it != network_neurons.end(); it++)
+			//~ std::cout << *it << ", ";
+		//~ std::cout << "\n" << std::endl;
+		//~ 
+		// write burst labels
+		std::string fileBurstLabels = outputDir + "burstLabels.bin";
+	
+		this->write_burst_labels(assigned_burst_labels, fileBurstLabels.c_str());
+		this->write_dend_spike_times((outputDir + fileSimName + "dendSpikes.bin").c_str());
+		this->write_soma_spike_times((outputDir + fileSimName + "somaSpikes.bin").c_str());
+			
+		this->write_interneuron_spike_times((outputDir + fileSimName + "interneuron_spikes.bin").c_str());
+	}
+}
+
+void HvcNetwork::rewire_fraction_connections(double fraction, std::string networkDir, std::string outputDir){
+	if (MPI_rank == 0)
+	{
+		std::string fileParameters = networkDir + "parameters.bin";
+	
+		this->read_number_of_neurons(fileParameters.c_str()); 
+		
+		std::string filename_connections_RA2I = networkDir + "RA_I_connections.bin";
+		std::string filename_connections_I2RA = networkDir + "I_RA_connections.bin";
+		std::string filename_connections_RA2RA = networkDir + "RA_RA_connections.bin";
+
+		this->read_synapses(syn_ID_RA_RA, weights_RA_RA, axonal_delays_RA_RA, filename_connections_RA2RA.c_str());
+		this->read_synapses(syn_ID_RA_I,  weights_RA_I,  axonal_delays_RA_I,  filename_connections_RA2I.c_str());
+		this->read_synapses(syn_ID_I_RA,  weights_I_RA,  axonal_delays_I_RA,  filename_connections_I2RA.c_str());
+		
+		for (int i = 0; i < N_RA; i++){
+			if (!syn_ID_RA_RA[i].empty()){
+				int num_connections_to_rewire = static_cast<int>(fraction*syn_ID_RA_RA[i].size());
+				std::vector<int> target_indices(syn_ID_RA_RA[i].size());
+				std::iota(target_indices.begin(), target_indices.end(), 0);
+				
+				std::vector<int> target_indices_to_rewire = sample_randomly_noreplacement_from_array(target_indices, num_connections_to_rewire, noise_generator);
+				
+				//std::cout << "Neuron " << i << " with " << syn_ID_RA_RA[i].size() 
+				//		  << " outputs and " << num_connections_to_rewire << " connections to rewire\n";
+				
+				//for (size_t j = 0; j < syn_ID_RA_RA[i].size(); j++)
+				//	std::cout << syn_ID_RA_RA[i][j] << " ";
+				//std::cout << "\n" << std::endl;
+				
+				
+				//for (size_t j = 0; j < target_indices_to_rewire.size(); j++)
+				//	std::cout << target_indices_to_rewire[j] << "," << syn_ID_RA_RA[i][target_indices_to_rewire[j]] << " ";
+				//std::cout << "\n" << std::endl;
+				
+				std::vector<int> possible_new_targets(N_RA-1-static_cast<int>(syn_ID_RA_RA[i].size()));
+				std::set<int> old_targets_set(syn_ID_RA_RA[i].begin(), syn_ID_RA_RA[i].end());
+				
+				int possible_target_counter = 0;
+				for (int j = 0; j < N_RA; j++)
+					if ((j!=i)&&(old_targets_set.find(j)==old_targets_set.end())){
+						possible_new_targets[possible_target_counter] = j;
+						possible_target_counter += 1;
+					}
+				
+				std::vector<int> new_targets = sample_randomly_noreplacement_from_array(possible_new_targets, num_connections_to_rewire, noise_generator);
+				
+				//std::cout << "New targets\n";
+				//for (size_t j = 0; j < new_targets.size(); j++)
+				//	std::cout << new_targets[j] << " ";
+				//std::cout << "\n" << std::endl;
+				
+				
+				for (int j = 0; j < num_connections_to_rewire; j++)
+					syn_ID_RA_RA[i][target_indices_to_rewire[j]] = new_targets[j];	
+			}
+		}
+		this->write_experimental_network_to_directory(outputDir);
+	}	
+	
+}
 
 void HvcNetwork::wire_polychronous_network_customDelays(int num_outputs, int max_num_inputs,
 			double synch_margin, double mean_delay, double sd_delay, std::string outputDir)
@@ -756,6 +1014,7 @@ int HvcNetwork::wire_polychronous_network_integrationTimes_iteration(int min_num
 		
 	double DELAY_EARLY_MARGIN = synch_margin / 2.0;
 	double DELAY_LATE_MARGIN = synch_margin / 2.0;
+	double DELAY = 3.4; // single delay value was 3.4
 	int NUM_NEURONS_TO_SAMPLE = 1;
 	
 	double FRACTION_LOST = 0.0; // fraction of allowed lost synapses
@@ -766,7 +1025,7 @@ int HvcNetwork::wire_polychronous_network_integrationTimes_iteration(int min_num
 	int allowed_num_lost = static_cast<int>(static_cast<double>(total_num_outputs) * FRACTION_LOST);
 	
 	std::vector<double> synapse_delays(total_num_outputs);
-	std::fill(synapse_delays.begin(), synapse_delays.end(), 0.0);
+	std::fill(synapse_delays.begin(), synapse_delays.end(), DELAY);
 	
 	//std::cout << "Number of sampled synapses: " << synapse_delays.size() << "\n";
 	//std::cout << "Allowed number of lost synapses: " << allowed_num_lost << "\n";
@@ -834,8 +1093,8 @@ int HvcNetwork::wire_polychronous_network_integrationTimes_iteration(int min_num
 			bool target_was_connected = false; // indicator that target was connected by some source neuron
 			
 			// find source neurons that are able to connect to the target
-			auto it_earliest_source = std::lower_bound(source_with_spikes.begin(), source_with_spikes.end(), std::pair<double, int>(target_label - integration_times[target_id] - DELAY_EARLY_MARGIN, -1));
-			auto it_latest_source = std::upper_bound(source_with_spikes.begin(), source_with_spikes.end(), std::pair<double, int>(target_label - integration_times[target_id] + DELAY_LATE_MARGIN, 1e6));
+			auto it_earliest_source = std::lower_bound(source_with_spikes.begin(), source_with_spikes.end(), std::pair<double, int>(target_label - integration_times[target_id] - DELAY - DELAY_EARLY_MARGIN, -1));
+			auto it_latest_source = std::upper_bound(source_with_spikes.begin(), source_with_spikes.end(), std::pair<double, int>(target_label - integration_times[target_id] - DELAY + DELAY_LATE_MARGIN, 1e6));
 			
 			if (it_earliest_source != it_latest_source){
 				// extract source neurons that are able to connect to the target
@@ -859,13 +1118,13 @@ int HvcNetwork::wire_polychronous_network_integrationTimes_iteration(int min_num
 				
 					
 					// if spike arrives on time
-					if ((!unwired_delays.empty()) && (source_first_spike_time >= target_label - integration_times[target_id] - DELAY_EARLY_MARGIN)
-					   && (source_first_spike_time <= target_label - integration_times[target_id] + DELAY_LATE_MARGIN)){
+					if ((!unwired_delays.empty()) && (source_first_spike_time >= target_label - integration_times[target_id] - DELAY - DELAY_EARLY_MARGIN)
+					   && (source_first_spike_time <= target_label - integration_times[target_id] - DELAY + DELAY_LATE_MARGIN)){
 					
 						new_num_inputs[target_id] += 1;
 							
 						double weight = this->sample_Ge2e();
-						double delay = 0;
+						double delay = DELAY;
 						
 						// remove synapse
 						unwired_delays.pop_back();
@@ -934,7 +1193,7 @@ int HvcNetwork::wire_polychronous_network_integrationTimes_iteration(int min_num
 					sampling_pool.pop_back();	
 				}
 				
-				double delay = 0;
+				double delay = DELAY;
 				double label = source_first_spike_time + delay + integration_times[new_target_id];
 				
 				
@@ -2165,44 +2424,91 @@ void HvcNetwork::sample_noise_based_on_dend_capacitance(const std::vector<double
 	}
 }
 
-
-void HvcNetwork::sample_capacitance_and_integration_times(int N, std::pair<double,double> c_range, 
+void HvcNetwork::sample_capacitance_and_integration_times_lognormal(int N, std::pair<double,double> int_range, double int_mean, double int_std,
 						std::vector<double>& capacitance_dend, std::vector<double>& integration_times){
-	const std::vector<double> CM_DEND = {1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 5.0};
-	const std::vector<double> INTEGRATION_TIMES = {5.522652, 5.746652, 5.9594526, 6.1650515, 6.360252, 6.552652, 6.738252, 6.9222517, 7.106651, 7.288252, 7.473452, 7.6578517, 7.8450527, 8.029451, 8.213052, 8.394652, 8.573452, 8.749851, 8.924651, 9.093852, 9.264652, 9.430652, 9.595452, 9.760251, 9.925852, 10.088252, 10.248652, 10.410252, 10.572653, 10.732252, 10.892252, 11.051452, 11.209852, 11.367451, 11.523451, 11.677452, 11.830653, 11.983852, 12.133851, 12.282651, 12.432252};
+	const std::vector<double> CM_DEND = {0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 5.0, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 6.0, 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 7.0, 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 7.9, 8.0, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8, 8.9, 9.0, 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7, 9.8, 9.9, 10.0};
+	const std::vector<double> INTEGRATION_TIMES = {2.845373, 3.2756732, 3.6486728, 3.978773, 4.279573, 4.557473, 4.8193727, 5.0693727, 5.3418775, 5.5762773, 5.8042774, 6.0254774, 6.2410774, 6.4510775, 6.655478, 6.857078, 7.054678, 7.2482777, 7.439078, 7.6302776, 7.8170776, 8.002277, 8.185078, 8.367078, 8.549878, 8.727878, 8.904677, 9.083878, 9.259877, 9.436678, 9.611878, 9.785877, 9.962277, 10.1322775, 10.304678, 10.477878, 10.646677, 10.814679, 10.980678, 11.145077, 11.306679, 11.466278, 11.624277, 11.782278, 11.938678, 12.090277, 12.243477, 12.395078, 12.5458765, 12.693878, 12.843078, 12.990678, 13.139876, 13.289878, 13.43508, 13.585078, 13.732279, 13.880279, 14.027877, 14.177478, 14.325479, 14.475477, 14.625479, 14.777477, 14.928677, 15.080679, 15.232677, 15.387478, 15.542678, 15.697879, 15.855477, 16.014277, 16.174679, 16.333477, 16.497078, 16.660677, 16.826677, 16.995476, 17.164278, 17.333477, 17.507477, 17.68348, 17.859877, 18.037077, 18.220278, 18.404678, 18.589876, 18.781076, 18.972279, 19.168678, 19.365078, 19.565477, 19.77188, 19.981878, 20.192678, 20.408278, 20.630278, 20.855078, 21.084278};
 
-	double c_min_in = c_range.first;
-	double c_max_in = c_range.second;
+	double int_min_dist = int_range.first;
+	double int_max_dist = int_range.second;
 	
-	if (c_max_in > CM_DEND.back()){
-		std::cout << "Max capacitance in sample_integration_times exceeds max in the simulated data!" << std::endl;
+	if (int_max_dist > INTEGRATION_TIMES.back()){
+		std::cout << "Max integration time in sample_integration_times exceeds max in the simulated data!" << std::endl;
 		return;
 	}
 	
-	if (c_min_in < CM_DEND.front()){
-		std::cout << "Min capacitance in sample_integration_times exceeds min in the simulated data!" << std::endl;
+	if (int_min_dist < INTEGRATION_TIMES.front()){
+		std::cout << "Min integration time in sample_integration_times is below min in the simulated data!" << std::endl;
 		return;
 	}
-
-	double dc = CM_DEND[1] - CM_DEND[0]; // capacitance resolution
 
 	integration_times.resize(N);
 	capacitance_dend.resize(N);
 	
-	double c_min = CM_DEND.front();
+	double sigma = sqrt(std::log(1 + int_std * int_std / (int_mean * int_mean) ));
+	double mu = std::log(int_mean) - sigma * sigma / 2.0;
+	
 	
 	for (int i = 0; i < N; i++){
-		double rand_c = c_min_in + noise_generator.random(c_max_in-c_min_in);
+		double rand_int = noise_generator.sample_lognormal_distribution(mu, sigma);
 		
-		int ind_floor = static_cast<int>(floor((rand_c-c_min) / dc));
-		int ind_ceil = static_cast<int>(ceil((rand_c-c_min) / dc));
 		
-		double alpha = (rand_c - CM_DEND[ind_floor]) / dc;
+		while ((rand_int <= int_min_dist)||(rand_int >= int_max_dist)) rand_int = noise_generator.sample_lognormal_distribution(mu, sigma);
 		
-		integration_times[i] = (1-alpha) * INTEGRATION_TIMES[ind_floor] 
-							+ alpha * INTEGRATION_TIMES[ind_ceil];
+		auto it_low = std::lower_bound(INTEGRATION_TIMES.begin(), INTEGRATION_TIMES.end(), rand_int);
+		auto it_up = std::upper_bound(INTEGRATION_TIMES.begin(), INTEGRATION_TIMES.end(), rand_int);
+		
+		assert(it_low != INTEGRATION_TIMES.begin());
+		assert(it_up != INTEGRATION_TIMES.end());
+		
+		double alpha = (rand_int - *(it_low-1)) / (*it_up - *(it_low-1));
+		
+		//std::cout << *(it_low-1) << ", " << rand_int << ", " << *(it_up) << ", " << alpha << std::endl;
+		
+		capacitance_dend[i] = (1-alpha) * CM_DEND[std::distance(INTEGRATION_TIMES.begin(), it_low-1)]
+							+ alpha * CM_DEND[std::distance(INTEGRATION_TIMES.begin(), it_up)];
 							
-		capacitance_dend[i] = rand_c;
+		integration_times[i] = rand_int;
+	}
+}
+
+
+void HvcNetwork::sample_capacitance_and_integration_times_uniform(int N, std::pair<double,double> int_range, 
+						std::vector<double>& capacitance_dend, std::vector<double>& integration_times){
+	const std::vector<double> CM_DEND = {0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 5.0, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 6.0, 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 7.0, 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 7.9, 8.0, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8, 8.9, 9.0, 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7, 9.8, 9.9, 10.0};
+	const std::vector<double> INTEGRATION_TIMES = {2.845373, 3.2756732, 3.6486728, 3.978773, 4.279573, 4.557473, 4.8193727, 5.0693727, 5.3418775, 5.5762773, 5.8042774, 6.0254774, 6.2410774, 6.4510775, 6.655478, 6.857078, 7.054678, 7.2482777, 7.439078, 7.6302776, 7.8170776, 8.002277, 8.185078, 8.367078, 8.549878, 8.727878, 8.904677, 9.083878, 9.259877, 9.436678, 9.611878, 9.785877, 9.962277, 10.1322775, 10.304678, 10.477878, 10.646677, 10.814679, 10.980678, 11.145077, 11.306679, 11.466278, 11.624277, 11.782278, 11.938678, 12.090277, 12.243477, 12.395078, 12.5458765, 12.693878, 12.843078, 12.990678, 13.139876, 13.289878, 13.43508, 13.585078, 13.732279, 13.880279, 14.027877, 14.177478, 14.325479, 14.475477, 14.625479, 14.777477, 14.928677, 15.080679, 15.232677, 15.387478, 15.542678, 15.697879, 15.855477, 16.014277, 16.174679, 16.333477, 16.497078, 16.660677, 16.826677, 16.995476, 17.164278, 17.333477, 17.507477, 17.68348, 17.859877, 18.037077, 18.220278, 18.404678, 18.589876, 18.781076, 18.972279, 19.168678, 19.365078, 19.565477, 19.77188, 19.981878, 20.192678, 20.408278, 20.630278, 20.855078, 21.084278};
+
+	double int_min_dist = int_range.first;
+	double int_max_dist = int_range.second;
+	
+	if (int_max_dist > INTEGRATION_TIMES.back()){
+		std::cout << "Max integration time in sample_integration_times exceeds max in the simulated data!" << std::endl;
+		return;
+	}
+	
+	if (int_min_dist < INTEGRATION_TIMES.front()){
+		std::cout << "Min integration time in sample_integration_times is below min in the simulated data!" << std::endl;
+		return;
+	}
+
+	integration_times.resize(N);
+	capacitance_dend.resize(N);
+	
+	for (int i = 0; i < N; i++){
+		double rand_int = int_min_dist + noise_generator.random(int_max_dist-int_min_dist);
+		
+		auto it_low = std::lower_bound(INTEGRATION_TIMES.begin(), INTEGRATION_TIMES.end(), rand_int);
+		auto it_up = std::upper_bound(INTEGRATION_TIMES.begin(), INTEGRATION_TIMES.end(), rand_int);
+		
+		assert(it_low != INTEGRATION_TIMES.begin());
+		assert(it_up != INTEGRATION_TIMES.end());
+		
+		double alpha = (rand_int - *(it_low-1)) / (*it_up - *(it_low-1));
+		
+		capacitance_dend[i] = (1-alpha) * CM_DEND[std::distance(INTEGRATION_TIMES.begin(), it_low-1)]
+							+ alpha * CM_DEND[std::distance(INTEGRATION_TIMES.begin(), it_up)];
+							
+		integration_times[i] = rand_int;
 	}
 }
 

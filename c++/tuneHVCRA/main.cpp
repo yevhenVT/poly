@@ -9,8 +9,8 @@
 using namespace std::placeholders;
 
 
-const double cm = 0.5;
-const double timestep = 0.0125;
+const double cm = 10.0;
+const double timestep = 0.01;
 	
 double I(double ampl, double start, double t)
 {
@@ -214,7 +214,7 @@ void calculate_conductance_response(int N, double G_step, std::string dirname)
 
 int main(int argc, char **argv)
 {
-	std::string dirname = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/neuronResponse/cm0.5/";
+	std::string dirname = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/neuronResponse/cm10.0/";
 	
 	int N = 50;
 	double ampl_step = 0.025;

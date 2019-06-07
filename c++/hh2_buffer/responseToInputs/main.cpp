@@ -6,7 +6,7 @@
 #include <fstream>
 
 const double TRIAL_DURATION = 100.0; // trial duration in ms
-const double TIMESTEP = 0.005; // time resolution of dynamics
+const double TIMESTEP = 0.01; // time resolution of dynamics
 const unsigned SEED = 1991; // seed for random number generator
 const double TRAINING_KICK = 3.0; // excitatory conductance kick delivered to training neurons
 	
@@ -241,7 +241,7 @@ int main(int argc, char** argv){
 	
 	int num_inputs = 170; // number of excitatory inputs
 	double gee_max = 0.004; // max strenght of excitatory input in mS/cm^2
-	double synch_window = 6.0; // time window for input arrivals in ms
+	double synch_window = 8.0; // time window for input arrivals in ms
 	
 	int num_trial = 50; // number of trials to repeat
 	

@@ -27,9 +27,13 @@ public:
 																	// Then num_output connections are send for each neuron to the
 																	// neurons that are supposed to spike later. 
 	
-	void wire_polychronous_network_integrationTimes(int num_outputs, int max_num_inputs,
-			double synch_margin, std::pair<double,double> c_range, std::string outputDir); // wire a polychronous network with zero delays and different integration times
-														 // coming from a distribution of dendritic membrane capacitance
+	void wire_polychronous_network_integrationTimes_lognormal(int num_outputs, int max_num_inputs,
+			double synch_margin, std::pair<double,double> int_range, double int_mean, double int_std, std::string outputDir); // // wire a polychronous network with a delta delay distribution and a truncated lognormal integration times distribution
+														 
+	
+	void wire_polychronous_network_integrationTimes_uniform(int num_outputs, int max_num_inputs,
+			double synch_margin, std::pair<double,double> int_range, std::string outputDir); // wire a polychronous network with a delta delay distribution and a uniform distribution of integration times
+														 
 	
 	void wire_polychronous_network_customDelays(int num_outputs, int max_num_inputs,
 			double synch_margin, double mean_delay, double sd_delay, std::string outputDir); // wire causal network
@@ -40,6 +44,8 @@ public:
 																		double mean_delay, double sd_delay,
 																		std::string outputDir); // sample several parallel chains
 
+	void rewire_fraction_connections(double fraction, std::string netDir, std::string outputDir); // rewire fraction of HVC-RA -> HVC-RA synapses to random targets
+	
 	void sample_network_without_RA2RA(int N_ra, int N_i, double pei, double pie, double mean_delay, double sd_delay); // sample HVC network without HVC-RA -> HVC-RA connections
 	
 	// prepare networks
@@ -221,9 +227,12 @@ private:
     double sample_Gi2e(); // sample synaptic weight from HVC(I) to HVC(RA) neuron
     double sample_Ge2e(); // sample synaptic weight from HVC(RA) to HVC(RA) neuron
     
-	void sample_capacitance_and_integration_times(int N, std::pair<double,double> c_range, 
-						std::vector<double>& capacitance_dend, std::vector<double>& integration_times); // sample dendritic capacitance and as a result integration times for neurons
+	void sample_capacitance_and_integration_times_uniform(int N, std::pair<double,double> int_range, 
+						std::vector<double>& capacitance_dend, std::vector<double>& integration_times); // sample dendritic capacitance from a uniform distribution and as a result integration times for neurons
     
+    void sample_capacitance_and_integration_times_lognormal(int N, std::pair<double,double> int_range, double int_mean, double int_std,
+						std::vector<double>& capacitance_dend, std::vector<double>& integration_times); // sample dendritic capacitance from a truncated lognormal distribution with a cut-off low value.
+																										// based on capacitance, sample integration times
     
     void sample_noise_based_on_dend_capacitance(const std::vector<double>& cm,
 				std::vector<double>& mu_soma, std::vector<double>& std_soma, 

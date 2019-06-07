@@ -196,7 +196,7 @@ int main(int argc, char** argv)
 	std::string fileTraining = networkDir + "training_neurons.bin";
 
 	hvc.prepare_network_for_testing(networkDir, fileTraining, resample);
-	hvc.read_capacitance((networkDir + "cm_dend_and_integration_times.bin").c_str(), (outputDir + "noise.bin").c_str());
+	//hvc.read_capacitance((networkDir + "cm_dend_and_integration_times.bin").c_str(), (outputDir + "noise.bin").c_str());
 	hvc.test_network(num_trials, trial_duration, training_spread, record, outputDir, filePrefix);
 	
 	MPI_Finalize();

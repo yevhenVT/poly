@@ -30,13 +30,13 @@ int main()
 	//double timestep = 0.001;
 	double timestep = 0.02;
 
-	std::string filename = "/home/eugene/Programming/data/mlong/noise/noiseCheckDebrabandNew/noise_s0.25_d0.0_dt0.02_poly.bin";
+	std::string filename = "/home/eugene/Programming/data/mlong/noise/noiseCheckDebrabandNew/noise_s0.30_d0.0_dt0.02.bin";
 	//std::string filename = "/home/eugene/Programming/data/mlong/noise/noiseCheckEuler/noise_s0.1_d0.2_dt0.01.bin";
 	
 	//std::function<double(double)> Iext
 	// set noise
 	double white_noise_mean_soma = 0.0;
-	double white_noise_std_soma = 0.25;
+	double white_noise_std_soma = 0.30;
 	double white_noise_mean_dend = 0.0;
 	double white_noise_std_dend = 0.0;
 	
