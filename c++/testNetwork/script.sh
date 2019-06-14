@@ -13,7 +13,14 @@ mpirun -np 40 ./testNetwork -n /home/eugene/Programming/data/mlong/noise/network
 
 
 mpirun -np 40 ./testNetwork -n /home/eugene/Programming/data/mlong/randomFeedforward/poly/network/new/ -o /home/eugene/Programming/data/mlong/randomFeedforward/poly/network/new/test/ -f testTrial_ -nt 50 -d 1000.0 -s 0.0
-mpirun -np 40 ./testNetwork -n /home/eugene/Programming/data/mlong/randomFeedforward/poly/f0.2/ -o /home/eugene/Programming/data/mlong/randomFeedforward/poly/f0.2/test/ -f testTrial_ -nt 50 -d 1000.0 -s 0.0 --record
+mpirun -np 40 ./testNetwork -n /home/eugene/Programming/data/mlong/randomFeedforward/poly/f0.2/ -o /home/eugene/Programming/data/mlong/randomFeedforward/poly/f0.2/test/ -f testTrial_ -nt 50 -d 1300.0 -s 0.0
 
+mpirun -np 40 ./testNetwork -n /home/eugene/Programming/data/mlong/integrationConst/grid/grid1/ -o /home/eugene/Programming/data/mlong/integrationConst/grid/grid1/test/ -f testTrial_ -nt 50 -d 1300.0 -s 0.0
 
+mpirun -np 40 ./testNetwork -n /home/eugene/Programming/data/mlong/integrationConst/grid/grid5_seed1991/ -o /home/eugene/Programming/data/mlong/integrationConst/grid/grid5_seed1991/testTraces/ -f testTrial_ -nt 50 -d 900.0 -s 0.0 --record
 
+mpirun -np 40 ./testNetwork -n /home/eugene/Programming/data/mlong/integrationConst/grid/grid5_seed1991/ -o /home/eugene/Programming/data/mlong/integrationConst/grid/grid5_seed1991/testTracesScale10.0/ -f testTrial_ -nt 50 -d 650.0 -s 0.0 --record
+
+mpirun -np 40 ./testNetwork -n /home/eugene/Programming/data/mlong/randomFeedforward/poly/network/new/ -o /home/eugene/Programming/data/mlong/integrationConst/polyScaled/scaled2.0/ -f testTrial_ -nt 50 -d 1000.0 -s 0.0 --record
+
+mpirun -np 40 ./testNetwork -n /home/eugene/Programming/data/mlong/integrationConst/gee0.032/poly3/ -o /home/eugene/Programming/data/mlong/integrationConst/gee0.032/poly3/test/ -f testTrial_ -nt 50 -d 400.0 -s 0.0 --record

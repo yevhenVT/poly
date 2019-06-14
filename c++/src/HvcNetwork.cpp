@@ -21,9 +21,9 @@ const double HvcNetwork::TIMESTEP = 0.01; // time step for dynamics in ms
 const double HvcNetwork::NETWORK_UPDATE_FREQUENCY = 0.1; // how often network state should be updated in ms
 
 const double HvcNetwork::WHITE_NOISE_MEAN_SOMA = 0.0; // dc component of white noise to soma
-const double HvcNetwork::WHITE_NOISE_STD_SOMA = 0.0; // variance of white noise to soma
+const double HvcNetwork::WHITE_NOISE_STD_SOMA = 0.0; // variance of white noise to soma; default 0.1
 const double HvcNetwork::WHITE_NOISE_MEAN_DEND = 0.0; // dc component of white noise to dendrite
-const double HvcNetwork::WHITE_NOISE_STD_DEND = 0.0; // variance of white noise to dendrite
+const double HvcNetwork::WHITE_NOISE_STD_DEND = 0.0; // variance of white noise to dendrite; default 0.2
 
 			
 HvcNetwork::HvcNetwork(unsigned seed)
@@ -491,10 +491,23 @@ void HvcNetwork::wire_polychronous_network_integrationTimes_lognormal(int num_ou
 				continue_growth = 0;
 			
 			
-			if ( network_neurons.size() / 1000 == save_iter )
-			{	
-
+			
+			
+			///////////////////////////////////////
+			// trial duration for sampled labels //
+			///////////////////////////////////////
+			max_burst_time = *std::max_element(assigned_burst_labels.begin(), assigned_burst_labels.end());
+			
+			
+			
+			std::cout << "Connected network size = " << network_neurons.size() << "\n" << std::endl;
+			std::cout << "Max burst time = " << max_burst_time << "\n" << std::endl;
+			
+			if (network_neurons.size() >= N_RA)
+				continue_growth = 0;
 				
+			if (( network_neurons.size() / 1000 == save_iter ) || (continue_growth == 0))
+			{		
 				std::string fileSimName = "e" + std::to_string(Gee_max) + "_i" + std::to_string(Gie_max) + "_";
 			
 				this->write_dend_spike_times((outputDir + fileSimName + "dendSpikes.bin").c_str());
@@ -510,19 +523,6 @@ void HvcNetwork::wire_polychronous_network_integrationTimes_lognormal(int num_ou
 				save_iter += 1;
 				
 			}
-			
-			///////////////////////////////////////
-			// trial duration for sampled labels //
-			///////////////////////////////////////
-			max_burst_time = *std::max_element(assigned_burst_labels.begin(), assigned_burst_labels.end());
-			
-			
-			
-			std::cout << "Connected network size = " << network_neurons.size() << "\n" << std::endl;
-			std::cout << "Max burst time = " << max_burst_time << "\n" << std::endl;
-			
-			if (network_neurons.size() >= N_RA)
-				continue_growth = 0;
 		}
 		
 		this->randomize_after_trial();
@@ -2390,8 +2390,8 @@ std::vector<double> HvcNetwork::sample_axonal_delays_from_lognormal(int N, doubl
 void HvcNetwork::sample_noise_based_on_dend_capacitance(const std::vector<double>& cm,
 				std::vector<double>& mu_soma, std::vector<double>& std_soma, 
 				std::vector<double>& mu_dend, std::vector<double>& std_dend){
-	const std::vector<double> CM_DEND = {1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0};
-	const std::vector<double> STD_DEND = {0.198, 0.233, 0.263, 0.29, 0.315, 0.34, 0.36};
+	const std::vector<double> CM_DEND = {0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0};
+	const std::vector<double> STD_DEND = {0.163, 0.198, 0.233, 0.263, 0.29, 0.315, 0.34, 0.36, 0.4, 0.42, 0.44, 0.46, 0.478, 0.495, 0.513, 0.53, 0.546, 0.562, 0.577, 0.592};
 
 	const double std_soma_const = 0.1;
 	const double mu_soma_const = 0.0;
@@ -2412,6 +2412,11 @@ void HvcNetwork::sample_noise_based_on_dend_capacitance(const std::vector<double
 	double c_min = CM_DEND.front();
 	
 	for (int i = 0; i < N_RA; i++){
+		if ((cm[i] <= CM_DEND.front()) || (cm[i] >= CM_DEND.back()) ){
+			std::cout << "Capacitance not in range: cm[" << i << "] = " << cm[i] << std::endl;
+			return;
+		}
+	
 		int ind_floor = static_cast<int>(floor((cm[i]-c_min) / dc));
 		int ind_ceil = static_cast<int>(ceil((cm[i]-c_min) / dc));
 		
@@ -2424,10 +2429,64 @@ void HvcNetwork::sample_noise_based_on_dend_capacitance(const std::vector<double
 	}
 }
 
+//~ void HvcNetwork::sample_capacitance_and_integration_times_lognormal(int N, std::pair<double,double> c_range, double c_mean, double c_std,
+						//~ std::vector<double>& capacitance_dend, std::vector<double>& integration_times){
+	//~ const std::vector<double> CM_DEND = {0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 5.0, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 6.0, 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 7.0, 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 7.9, 8.0, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8, 8.9, 9.0, 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7, 9.8, 9.9, 10.0};
+	//~ const std::vector<double> INTEGRATION_TIMES = {2.845373, 3.2756732, 3.6486728, 3.978773, 4.279573, 4.557473, 4.8193727, 5.0693727, 5.3418775, 5.5762773, 5.8042774, 6.0254774, 6.2410774, 6.4510775, 6.655478, 6.857078, 7.054678, 7.2482777, 7.439078, 7.6302776, 7.8170776, 8.002277, 8.185078, 8.367078, 8.549878, 8.727878, 8.904677, 9.083878, 9.259877, 9.436678, 9.611878, 9.785877, 9.962277, 10.1322775, 10.304678, 10.477878, 10.646677, 10.814679, 10.980678, 11.145077, 11.306679, 11.466278, 11.624277, 11.782278, 11.938678, 12.090277, 12.243477, 12.395078, 12.5458765, 12.693878, 12.843078, 12.990678, 13.139876, 13.289878, 13.43508, 13.585078, 13.732279, 13.880279, 14.027877, 14.177478, 14.325479, 14.475477, 14.625479, 14.777477, 14.928677, 15.080679, 15.232677, 15.387478, 15.542678, 15.697879, 15.855477, 16.014277, 16.174679, 16.333477, 16.497078, 16.660677, 16.826677, 16.995476, 17.164278, 17.333477, 17.507477, 17.68348, 17.859877, 18.037077, 18.220278, 18.404678, 18.589876, 18.781076, 18.972279, 19.168678, 19.365078, 19.565477, 19.77188, 19.981878, 20.192678, 20.408278, 20.630278, 20.855078, 21.084278};
+
+	//~ double c_min_dist = c_range.first;
+	//~ double c_max_dist = c_range.second;
+	
+	//~ if (c_max_dist > CM_DEND.back()){
+		//~ std::cout << "Max capacitance in sample_integration_times exceeds max in the simulated data!" << std::endl;
+		//~ return;
+	//~ }
+	
+	//~ if (c_min_dist < CM_DEND.front()){
+		//~ std::cout << "Min capacitance time in sample_integration_times is below min in the simulated data!" << std::endl;
+		//~ return;
+	//~ }
+
+	//~ integration_times.resize(N);
+	//~ capacitance_dend.resize(N);
+	
+	//~ double sigma = sqrt(std::log(1 + c_std * c_std / (c_mean * c_mean) ));
+	//~ double mu = std::log(c_mean) - sigma * sigma / 2.0;
+	
+	
+	//~ for (int i = 0; i < N; i++){
+		//~ double rand_c = noise_generator.sample_lognormal_distribution(mu, sigma);
+		
+		
+		//~ while ((rand_c <= c_min_dist)||(rand_c >= c_max_dist)) rand_c = noise_generator.sample_lognormal_distribution(mu, sigma);
+		
+		//~ auto it_low = std::lower_bound(CM_DEND.begin(), CM_DEND.end(), rand_c);
+		//~ auto it_up = std::upper_bound(CM_DEND.begin(), CM_DEND.end(), rand_c);
+		
+		//~ assert(it_low != CM_DEND.begin());
+		//~ assert(it_up != CM_DEND.end());
+		
+		//~ double alpha = (rand_c - *(it_low-1)) / (*it_up - *(it_low-1));
+		
+		//~ //std::cout << *(it_low-1) << ", " << rand_int << ", " << *(it_up) << ", " << alpha << std::endl;
+		
+		//~ capacitance_dend[i] = rand_c;
+		
+		//~ integration_times[i] = (1-alpha) * INTEGRATION_TIMES[std::distance(CM_DEND.begin(), it_low-1)]
+							//~ + alpha * INTEGRATION_TIMES[std::distance(CM_DEND.begin(), it_up)];
+	//~ }
+//~ }
+
+
 void HvcNetwork::sample_capacitance_and_integration_times_lognormal(int N, std::pair<double,double> int_range, double int_mean, double int_std,
 						std::vector<double>& capacitance_dend, std::vector<double>& integration_times){
-	const std::vector<double> CM_DEND = {0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 5.0, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 6.0, 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 7.0, 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 7.9, 8.0, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8, 8.9, 9.0, 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7, 9.8, 9.9, 10.0};
-	const std::vector<double> INTEGRATION_TIMES = {2.845373, 3.2756732, 3.6486728, 3.978773, 4.279573, 4.557473, 4.8193727, 5.0693727, 5.3418775, 5.5762773, 5.8042774, 6.0254774, 6.2410774, 6.4510775, 6.655478, 6.857078, 7.054678, 7.2482777, 7.439078, 7.6302776, 7.8170776, 8.002277, 8.185078, 8.367078, 8.549878, 8.727878, 8.904677, 9.083878, 9.259877, 9.436678, 9.611878, 9.785877, 9.962277, 10.1322775, 10.304678, 10.477878, 10.646677, 10.814679, 10.980678, 11.145077, 11.306679, 11.466278, 11.624277, 11.782278, 11.938678, 12.090277, 12.243477, 12.395078, 12.5458765, 12.693878, 12.843078, 12.990678, 13.139876, 13.289878, 13.43508, 13.585078, 13.732279, 13.880279, 14.027877, 14.177478, 14.325479, 14.475477, 14.625479, 14.777477, 14.928677, 15.080679, 15.232677, 15.387478, 15.542678, 15.697879, 15.855477, 16.014277, 16.174679, 16.333477, 16.497078, 16.660677, 16.826677, 16.995476, 17.164278, 17.333477, 17.507477, 17.68348, 17.859877, 18.037077, 18.220278, 18.404678, 18.589876, 18.781076, 18.972279, 19.168678, 19.365078, 19.565477, 19.77188, 19.981878, 20.192678, 20.408278, 20.630278, 20.855078, 21.084278};
+	// gee_max = 0.004
+	//const std::vector<double> CM_DEND = {0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 5.0, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 6.0, 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 7.0, 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 7.9, 8.0, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8, 8.9, 9.0, 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7, 9.8, 9.9, 10.0};
+	//const std::vector<double> INTEGRATION_TIMES = {2.845373, 3.2756732, 3.6486728, 3.978773, 4.279573, 4.557473, 4.8193727, 5.0693727, 5.3418775, 5.5762773, 5.8042774, 6.0254774, 6.2410774, 6.4510775, 6.655478, 6.857078, 7.054678, 7.2482777, 7.439078, 7.6302776, 7.8170776, 8.002277, 8.185078, 8.367078, 8.549878, 8.727878, 8.904677, 9.083878, 9.259877, 9.436678, 9.611878, 9.785877, 9.962277, 10.1322775, 10.304678, 10.477878, 10.646677, 10.814679, 10.980678, 11.145077, 11.306679, 11.466278, 11.624277, 11.782278, 11.938678, 12.090277, 12.243477, 12.395078, 12.5458765, 12.693878, 12.843078, 12.990678, 13.139876, 13.289878, 13.43508, 13.585078, 13.732279, 13.880279, 14.027877, 14.177478, 14.325479, 14.475477, 14.625479, 14.777477, 14.928677, 15.080679, 15.232677, 15.387478, 15.542678, 15.697879, 15.855477, 16.014277, 16.174679, 16.333477, 16.497078, 16.660677, 16.826677, 16.995476, 17.164278, 17.333477, 17.507477, 17.68348, 17.859877, 18.037077, 18.220278, 18.404678, 18.589876, 18.781076, 18.972279, 19.168678, 19.365078, 19.565477, 19.77188, 19.981878, 20.192678, 20.408278, 20.630278, 20.855078, 21.084278};
+
+	// gee_max = 0.032
+	const std::vector<double> CM_DEND = {0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0};
+	const std::vector<double> INTEGRATION_TIMES = {2.5364225, 2.8600223, 3.1576223, 3.4440224, 3.7118223, 3.9514225, 4.1682224, 4.3666224, 4.5574226, 4.7392225, 4.920422, 5.0968227, 5.2706227, 5.441422, 5.607622, 5.7696214, 5.9262223, 6.077622, 6.2248225, 6.367223};
 
 	double int_min_dist = int_range.first;
 	double int_max_dist = int_range.second;
@@ -2622,6 +2681,12 @@ void HvcNetwork::prepare_slaves_for_testing(std::string fileTraining)
 	//	std::cout << "Slaves are prepared for testing!\n" << std::endl; 
 }
 
+void HvcNetwork::scale_weights(double scale){
+	for (int i = 0; i < N_RA_local; i++)
+		for (size_t j = 0; j < weights_RA_RA_local[i].size(); j++)
+			weights_RA_RA_local[i][j] *= scale;
+}
+
 void HvcNetwork::initialize_dynamics()
 {	
 	this->distribute_work();
@@ -2637,8 +2702,8 @@ void HvcNetwork::initialize_dynamics()
 }
 
 void HvcNetwork::set_noise_based_on_dend_capacitance(const std::vector<double>& cm){
-	const std::vector<double> CM_DEND = {1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0};
-	const std::vector<double> std_dend = {0.198, 0.233, 0.263, 0.29, 0.315, 0.34, 0.36};
+	const std::vector<double> CM_DEND = {0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0};
+	const std::vector<double> std_dend = {0.163, 0.198, 0.233, 0.263, 0.29, 0.315, 0.34, 0.36, 0.4, 0.42, 0.44, 0.46, 0.478, 0.495, 0.513, 0.53, 0.546, 0.562, 0.577, 0.592};
 
 	double std_soma = 0.1;
 	double mu_soma = 0.0;
@@ -2651,6 +2716,11 @@ void HvcNetwork::set_noise_based_on_dend_capacitance(const std::vector<double>& 
 	assert(N_RA_local == static_cast<int>(cm.size()));
 	
 	for (int i = 0; i < N_RA_local; i++){
+		if ((cm[i] <= CM_DEND.front()) || (cm[i] >= CM_DEND.back()) ){
+			std::cout << "Capacitance not in range: cm[" << i << "] = " << cm[i] << std::endl;
+			return;
+		}
+		
 		int ind_floor = static_cast<int>(floor((cm[i]-c_min) / dc));
 		int ind_ceil = static_cast<int>(ceil((cm[i]-c_min) / dc));
 		
@@ -2658,6 +2728,10 @@ void HvcNetwork::set_noise_based_on_dend_capacitance(const std::vector<double>& 
 		
 		double std_dend_neuron = (1-alpha) * std_dend[ind_floor] 
 							+ alpha * std_dend[ind_ceil];
+	
+		if (std_dend_neuron > 0.3)
+			std::cout << "cm, std, ind_floor, ind_ceil, alpha = " << cm[i] << ", " << std_dend_neuron 
+				      << ", " << ind_floor << ", " << ind_ceil << ", " << alpha << std::endl;
 							
 		HVCRA_local[i].set_white_noise(mu_soma, std_soma, mu_dend, std_dend_neuron);
 	}
@@ -3079,7 +3153,7 @@ void HvcNetwork::test_network(int num_trials, double trial_duration, double spre
 	int num_RA_to_write = 0;
 	
 	if (record)
-		num_RA_to_write = 100;
+		num_RA_to_write = 200;
 	
     std::vector<int> RAtoWrite(num_RA_to_write);
 

@@ -11,7 +11,7 @@ import struct
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-
+from utils import *
 SIZE_OF_INT = 4
 SIZE_OF_DOUBLE = 8
 
@@ -94,7 +94,7 @@ def read_capacitance_and_integration_times(filename):
        
     return capacitance_dend, integration_times
     
-def plot_capacitance_and_integration_time_model(filename):
+def plot_capacitance_and_integration_time_model(filename, outdir="", prefix=""):
     """
     Plots dendritic capacitance and putative integration time of neurons in the model
     """
@@ -102,61 +102,102 @@ def plot_capacitance_and_integration_time_model(filename):
 
     sorted_ind = np.argsort(capacitance_dend)
         
-    capacitance_dend = capacitance_dend[sorted_ind]
-    integration_times = integration_times[sorted_ind]
-       
+    #capacitance_dend = capacitance_dend[sorted_ind]
+    #integration_times = integration_times[sorted_ind]
+    R = 10000.0
+    
+    membrane_time_const_dend = capacitance_dend * R / 1000.0
     
     print "Mean integration time: ",np.mean(integration_times)
     print "Std integration time: ",np.std(integration_times)
     print "Mean capacitance: ",np.mean(capacitance_dend)
     print "Std capacitance: ",np.std(capacitance_dend)
     
+    print "Mean dendritic membrane time constant: ",np.mean(membrane_time_const_dend)
+    print "Std dendritic membrane time constant: ",np.std(membrane_time_const_dend)
+    
+    exclude = np.arange(0, 170, 1)
+    
+    #plt.figure()
+    #plt.plot(capacitance_dend[sorted_ind], integration_times[sorted_ind], '-o')
+    #plt.xlabel('Capacitance dendrite ($\mu F/ cm^2$)')
+    #plt.ylabel('Putative integration time (ms)')
+    
+    #plt.figure()
+    #plt.hist(np.delete(capacitance_dend,exclude), bins=100)
+    #plt.xlabel('Capacitance dendrite ($\mu F/ cm^2$)')
+    #plt.ylabel('Count')
+    
     plt.figure()
-    plt.plot(capacitance_dend, integration_times, '-o')
-    plt.xlabel('Capacitance dendrite ($\mu F/ cm^2$)')
+    plt.plot(membrane_time_const_dend[sorted_ind], integration_times[sorted_ind], '-o')
+    plt.xlabel('Dendritic membrane time constant (ms)')
     plt.ylabel('Putative integration time (ms)')
     
+    
+    bin_width = 0.5
+    tconst, count = calculate_hist_with_fixed_bin_size(np.delete(membrane_time_const_dend, exclude), 0, 100.0, bin_width)
     plt.figure()
-    plt.hist(capacitance_dend, bins=100)
-    plt.xlabel('Capacitance dendrite ($\mu F/ cm^2$)')
+    plt.step(tconst, count)
+    plt.xlabel('Dendritic membrane time constant (ms)')
     plt.ylabel('Count')
+    _, ymax = plt.gca().get_ylim()
+    plt.ylim([0, ymax])
+    plt.xlim([0, 100])
+    
+    
+    
+    bin_width = 0.1
+    it, count = calculate_hist_with_fixed_bin_size(np.delete(integration_times, exclude), 0, 20.0, bin_width)
+    
+    pdf = count / (np.sum(count)*bin_width)
     
     plt.figure()
-    plt.hist(integration_times, bins=100)
-    plt.xlabel('integration time (ms)')
-    plt.ylabel('Count')
+    #plt.hist(integration_times, bins=100)
+    plt.step(it, pdf)
+    _, ymax = plt.gca().get_ylim()
+    plt.ylim([0, ymax])
+    plt.xlim([0, 20])
+    plt.xlabel('Integration time (ms)')
+    plt.ylabel('pdf')
     
+    if len(outdir) > 0:
+        write_to_file(it, pdf, os.path.join(outdir, prefix + "integration_times_pdf.txt"))
+    
+    integration_times_rounded = np.round(np.delete(integration_times, exclude), decimals=2)
+    uniqueIntTimes, counts = np.unique(integration_times_rounded, return_counts = True)
+    cdf_model = np.cumsum((np.ones(len(uniqueIntTimes))*counts)/np.float(sum(counts)))   
+ 
+    
+    plt.figure()
+    plt.step(np.concatenate(([0],uniqueIntTimes)), np.concatenate(([0],cdf_model)), where='post', label='result')
+    plt.ylim([0, 1.05])
+    plt.xlabel('Integration time (ms)')
+    plt.ylabel('Cum. freq.')
     plt.show()
 
-def read_hh2(filename):
+    if len(outdir) > 0:    
+        write_to_file(np.concatenate(([0],uniqueIntTimes)), np.concatenate(([0],cdf_model)), os.path.join(outdir, prefix + "integration_times_cdf.txt"))
+    
+
+
+def plot_hvcra(filename):
     """
-    Reads output of HH2 neuron
+    Plot dynamics of HVC-RA neuron
     """
-    with open(filename, mode = "rb") as f:
-        data = f.read()
-        
-        # calculate number of datapoints
-        num_datapoints = len(data) / (7 * SIZE_OF_DOUBLE)
-        
-        t = np.empty(num_datapoints, np.float32)
-        Vs = np.empty(num_datapoints, np.float32)
-        Vd = np.empty(num_datapoints, np.float32)
-        Gexc_d = np.empty(num_datapoints, np.float32)
-        Ginh_d = np.empty(num_datapoints, np.float32)
-        Is = np.empty(num_datapoints, np.float32)
-        Id = np.empty(num_datapoints, np.float32)
-        
-        a = np.array(struct.unpack("<{0}d".format(num_datapoints*7), data))
-        
-        t = a[::7]
-        Vs = a[1::7]
-        Vd = a[2::7]
-        Gexc_d = a[3::7]
-        Ginh_d = a[4::7]
-        Is = a[5::7]
-        Id = a[6::7]
-        
-        return t, Vs, Vd, Gexc_d, Ginh_d, Is, Id
+    t, Vs, _, Gexc, _, _, _ = read_hh2(filename)
+    
+    f = plt.figure()
+    ax1 = f.add_subplot(211)
+    ax1.plot(t, Vs)
+    ax1.set_ylabel('V (mV)')
+    
+    ax2 = f.add_subplot(212)
+    ax2.plot(t, Gexc)
+    ax2.set_ylabel('Gexc (mS/cm^2)')
+    ax2.set_xlabel('Time (ms)')
+    
+    plt.show()
+    
 
 def estimate_noise(filename):
     """
@@ -194,7 +235,7 @@ def plot_noise_vs_dend_capacitance_model(file_noise, file_capacitance):
         mu_dend = a[2::4]
         std_dend = a[3::4]
         
-        
+    #print std_dend[std_dend > 0.3]  
     
     plt.figure()
     plt.scatter(capacitance_dend, mu_soma)
@@ -252,6 +293,12 @@ def plot_capacitance_tuning_curve(dirname):
     c_d, mean_burst_onset_times, std_burst_onset_times, \
             mean_num_spikes_in_burst, std_num_spikes_in_burst = combine_capacitance_results(dirname)
     
+    
+    ind_sorted = np.argsort(c_d)
+    
+    print ", ".join(map(str, c_d[ind_sorted]))
+    print ", ".join(map(str, mean_burst_onset_times[ind_sorted]))
+    
     plt.figure()
     plt.plot(c_d, mean_burst_onset_times, '-o')
     plt.xlabel('Capacitance dendrite ($\mu F/ cm^2$)')
@@ -273,7 +320,19 @@ def plot_capacitance_tuning_curve(dirname):
     plt.ylabel('Std # spikes in burst')
     
     plt.show()
-   
+
+def get_unique_neurons(dirname):
+    """
+    Get id of unique neurons in trace simulations
+    """
+    neurons = []
+    
+    for f in os.listdir(dirname):
+        if "trial0" in f:
+            neurons.append(int(f.split("testTrial_trial0_RA")[1][:-4]))
+            
+    return neurons
+
 if __name__ == "__main__":
 # =============================================================================
 #     ### Response to input at different dendritic capacitance ###
@@ -344,9 +403,16 @@ if __name__ == "__main__":
 # =============================================================================
     
     
-    #plot_capacitance_tuning_curve("/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/sm6.0/")
+   # plot_capacitance_tuning_curve("/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/gee0.032/sm1.0/")
     
-    plot_capacitance_and_integration_time_model("/home/eugene/Programming/data/mlong/integrationConst/poly15/cm_dend_and_integration_times.bin")
+    plot_capacitance_and_integration_time_model("/home/eugene/Programming/data/mlong/integrationConst/gee0.032/poly2/cm_dend_and_integration_times.bin")
+    
+    #outdir = "/home/eugene/Programming/figures/mlong/integrationConstant/grid/"
+    #prefix = "mean8.5_std2.25_"
+    #fileCandIt = "/home/eugene/Programming/data/mlong/integrationConst/grid/grid20_seed956699/cm_dend_and_integration_times.bin"
+    #plot_capacitance_and_integration_time_model(fileCandIt, outdir=outdir, prefix=prefix)
+    
+    #plot_capacitance_and_integration_time_model("/home/eugene/Programming/data/mlong/integrationConst/grid/grid19/cm_dend_and_integration_times.bin")
     
     #plt.show()
    
@@ -359,8 +425,8 @@ if __name__ == "__main__":
     #estimate_noise(filename)
     
     
-    #file_noise = "/home/eugene/Programming/data/mlong/integrationConst/poly2/test_same_noise/noise.bin"
-    #file_capacitance = "/home/eugene/Programming/data/mlong/integrationConst/poly2/cm_dend_and_integration_times.bin"
+    #file_noise = "/home/eugene/Programming/data/mlong/integrationConst/grid/grid5_seed1991/test/noise.bin"
+    #file_capacitance = "/home/eugene/Programming/data/mlong/integrationConst/grid/grid5_seed1991/cm_dend_and_integration_times.bin"
     #plot_noise_vs_dend_capacitance_model(file_noise, file_capacitance)
 
     #dirname = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/same_noise/"
@@ -374,5 +440,27 @@ if __name__ == "__main__":
     
     
     #plot_capacitance_and_integration_time_model("/home/eugene/Programming/data/mlong/integrationConst/poly3/cm_dend_and_integration_times.bin")
-#     
+     
     #estimate_noise("/home/eugene/Programming/data/mlong/noise/noiseCheckDebrabandNew/noise_s0.30_d0.0_dt0.02.bin")
+    #estimate_noise("/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/findNoiseForSameStdV/cm4.5/noise_s0.1_d0.39.bin")
+    
+    #dirname = "/home/eugene/Programming/data/mlong/integrationConst/grid/grid5_seed1991/testTraces"
+    #file_capacitance = "/home/eugene/Programming/data/mlong/integrationConst/grid/grid5_seed1991/cm_dend_and_integration_times.bin"
+    #capacitance_dend, integration_times = read_capacitance_and_integration_times(file_capacitance)
+    
+    #neurons = sorted(get_unique_neurons(dirname))
+    
+    #bigIntegrationInd = np.where(integration_times[neurons] > 10.0)[0]
+    #smallIntegrationInd = np.where(integration_times[neurons] < 4.5)[0]
+   
+    #print "Neuron with big integration times:"
+    #for i in bigIntegrationInd:
+    #    print neurons[i]
+    
+    
+    #print "Neuron with small integration times:"
+    #for i in smallIntegrationInd:
+    #    print neurons[i]
+        
+    #plot_hvcra("/home/eugene/Programming/data/mlong/integrationConst/grid/grid5_seed1991/testTracesScale10.0/testTrial_trial0_RA18050.bin")
+    

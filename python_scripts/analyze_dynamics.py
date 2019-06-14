@@ -10,6 +10,7 @@ from show_spike_raster import plot_spikes
 from analyze_input_response import read_hh2
 from show_axonal_conduction_dist import read_connections
 
+from utils import *
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -55,7 +56,58 @@ def plot_ordered_noisy_spikes(duration, file_spikes, file_order):
 
     plt.show()    
     
+def plot_input_times_low_in_degree(file_connections, file_spikes):
+    """
+    Plot input times of neurons with low in-degree that spike close to starters
+    """
+    
+    INTERSPIKE_INTERVAL = 10.0
+    MIN_NUM_SPIKES_IN_BURST = 2
+        
+    burst_onsets_one_trial, num_spikes_in_burst_one_trial = find_burst_onsets(file_spikes, MIN_NUM_SPIKES_IN_BURST, INTERSPIKE_INTERVAL)          
+    (N, targets_ID, _, delays) = read_connections(file_connections)
+   
+    burst_onsets = np.empty(N, np.float32)
+    for i in range(N):
+        if len(burst_onsets_one_trial[i]) == 0:
+            burst_onsets[i] = -1.0
+        elif len(burst_onsets_one_trial[i]) == 1:
+            burst_onsets[i] = burst_onsets_one_trial[i][0]
+        else:
+            print "Neuron {0} has {1} bursts!".format(i, len(burst_onsets_one_trial[i]))
+    
 
+    N_TR = 170
+    
+    # calculate in-degree
+    in_degree = np.zeros(N, np.int32)
+    for i in range(N):
+        for target in targets_ID[i]:
+            in_degree[target] += 1
+
+
+    mean_integration_time_low_degree = []
+    
+    for i in range(N_TR, N):
+        #if (burst_onsets[i] < 150) & (in_degree[i] < 40):
+        if in_degree[i] < 40:
+            print i, in_degree[i], burst_onsets[i]
+            
+            inputTimes = get_input_times_neuron(targets_ID, burst_onsets, delays, i)
+            mean_integration_time_low_degree.append(np.mean(inputTimes))
+            #plt.figure()
+            #plt.hist(inputTimes)
+            #plt.xlabel('Input time (ms)')
+            #plt.ylabel('Count')
+            
+            #plt.show()
+
+    plt.figure()
+    plt.hist(mean_integration_time_low_degree)
+    plt.xlabel('Integration time (ms)')
+    plt.ylabel('Count')
+    
+    plt.show()
 
 def plot_input_times(file_connections, file_spikes):
     """
@@ -87,6 +139,39 @@ def plot_input_times(file_connections, file_spikes):
     plt.ylabel('Count')
     
     plt.show()
+
+def get_input_times_neuron(target_ids, burst_times, axonal_delays, neuron_id):
+    """
+    Function estimates input times relative to the target burst time of the requested neuron
+    """
+    N = len(target_ids)
+    
+    inputTimes = []
+    
+    assert burst_times[neuron_id] > 0
+    
+    for i in range(N):
+        if (neuron_id in target_ids[i]) and (burst_times[i]) > 0:
+            for j, target in enumerate(target_ids[i]):
+                if (target == neuron_id):
+                    time_difference = burst_times[i] + axonal_delays[i][j] - burst_times[target]
+
+                    inputTimes.append(time_difference)
+                        
+                            
+                
+    MARGIN_LATE = 0.0
+
+    num_inputs = len(inputTimes)
+    num_late_inputs = sum(inp > MARGIN_LATE for inp in inputTimes)
+
+    print "Total number of inputs: ",num_inputs
+    print "Number of late inputs: ",num_late_inputs
+    print "Fraction of late inputs: ",float(num_late_inputs) / float(num_inputs)
+    print "Mean of input times: ",np.mean(inputTimes)
+    print "Std of input times: ",np.std(inputTimes)
+    
+    return inputTimes
 
 
 def get_input_times(target_ids, burst_times, axonal_delays):
@@ -273,18 +358,6 @@ def calculate_average_burst_onset_density(simDir, netDir, start=-5.0, end=1000.0
     
     return time, density_all_trials / bin_width
 
-
-def write_to_file(x, y, filename):
-    """
-    Write 2 arrays to a txt file
-    """
-    with open(filename, 'w') as f:
-        for xx, yy in zip(x, y):
-            f.write(str(xx))
-            f.write("\t")
-            f.write(str(yy))
-            f.write("\n")
-
 def plot_burst_onset_density(filename, start=-5.0, end=1000.0, bin_width=0.75, min_num_spikes_in_burst=2, max_interspike_interval=10.0):
     """
     Plot density of burst onset times
@@ -328,30 +401,6 @@ def plot_power_fft(signal, dt):
     plt.yscale('log')
 
     plt.show()
-
-def calculate_hist_with_fixed_bin_size(a, start, end, bin_width):
-    """
-    Calculate histogram on array a with fixed size bin_width in range [start, end]
-    """
-    size = int((end - start) / bin_width) + 1
-    x = np.array([float(i)*bin_width + start + bin_width/2. for i in range(size)])
-    
-    counts = np.zeros(size, np.int32)    
-    
-    #print min(burst_times)
-    
-    a = map(lambda x: x - start, a)
-    a = sorted(a)
-    #print min(burst_times)
-    
-    for aa in a:
-        ind = int(aa / bin_width)
-        if ind > size - 1:
-            continue
-        else:
-            counts[ind] += 1
-        
-    return x, counts
 
 
 def find_connected_neurons(netDir):
@@ -450,7 +499,7 @@ def find_burst_onsets(filename, min_num_spikes_in_burst, max_interspike_interval
     Burst is defined as a sequence of minimum min_num_spikes_in_burst spikes
     with max interspike interval max_interspike_interval
     """
-    (N, spike_times_raw, neuron_fired) = read_spikes(os.path.join(simDir, filename))
+    (N, spike_times_raw, neuron_fired) = read_spikes(filename)
 
     burst_onsets = [[] for _ in range(N)]
     num_spikes_in_burst = [[] for _ in range(N)]
@@ -480,6 +529,60 @@ def find_burst_onsets(filename, min_num_spikes_in_burst, max_interspike_interval
                               
                 
     return burst_onsets, num_spikes_in_burst
+
+def plot_scaled_weights_results():
+    """
+    Plots max spectral power in interval (50 Hz, 250 Hz) for networks with scaled excitatory
+    conductances
+    """
+    scaling = [1.0, 2.0, 4.0, 6.0]
+    
+    spectral_power_integration_times = [3113, 4295, 4381, 4675]
+    spectral_power_axonal_delays = [1118, 633, 529, 906]
+    
+    plt.figure()
+    plt.plot(scaling, np.log10(spectral_power_integration_times), '-o', label='integration times')
+    plt.plot(scaling, np.log10(spectral_power_axonal_delays), '-o', label='axonal conduction delays')
+    plt.xlabel('Excitatory weight scaling')
+    plt.ylabel('Log of max spectrial power in (50Hz, 250Hz)')
+    plt.legend()
+    
+
+def plot_integration_times_grid_results():
+    """
+    Plots max spectral power of oscillations in burst density in interval (50 Hz, 150 Hz) across 2d grid
+    of log-normal integration times distributions
+    """
+    mean = [5.5, 6.5, 7.5, 8.5]
+    std = [0.25, 0.75, 1.25, 1.75, 2.25]
+    
+    X, Y = np.meshgrid(std, mean)
+    
+    print X
+    print Y
+    # freq between 50Hz and 150Hz
+    #spectral_power = np.array([[191141, 121163, 141891, 22266, 4363],
+    #                           [113578, 81484, 161183, 13767, 1099],
+    #                           [131336, 101788, 299852, 25816, None],
+    #                           [114095, 114220, 84852, 109604, None]])
+    
+    # freq between 50Hz and 250Hz
+    spectral_power = np.array([[191141, 121163, 141891, 22266, 4363],
+                               [130433, 81484, 161183, 13767, 1099],
+                               [131336, 101788, 299852, 25816, 964],
+                               [114095, 114220, 84852, 109604, 1665]])
+    
+    
+    plt.imshow(np.log10(spectral_power), extent=[0.0,2.5,9,5], aspect='auto')
+    plt.title('Log spectral power')
+    plt.xlabel('std integration time (ms)')
+    plt.ylabel('mean integration time (ms)')
+    plt.colorbar()
+    plt.xticks(std)
+    plt.yticks(mean)
+    
+    
+    print spectral_power
             
 def plot_rewiring_results():
     """
@@ -743,6 +846,14 @@ def analyze_spikes_multiple_trials(simDir, netDir, fileJitter=None):
 
 
 if __name__ == "__main__":
+    #simDir = "/home/eugene/Programming/data/mlong/integrationConst/grid/grid5_seed1991/testTracesScale4.0/"
+    #netDir = "/home/eugene/Programming/data/mlong/integrationConst/grid/grid5_seed1991/"
+    
+    
+    simDir = "/home/eugene/Programming/data/mlong/integrationConst/polyScaled/scaled2.0/"
+    netDir = "/home/eugene/Programming/data/mlong/randomFeedforward/poly/network/new/"
+    
+    
     #simDir = "/home/eugene/Programming/data/mlong/randomFeedforward/poly/f0.0/test/"
     #netDir = "/home/eugene/Programming/data/mlong/randomFeedforward/poly/f0.0/"
     
@@ -764,12 +875,15 @@ if __name__ == "__main__":
     
     #analyze_spikes_multiple_trials(simDir, netDir, file_jitter)
     #analyze_spikes_multiple_trials(simDir, netDir)
+    
     #plot_rewiring_results()
     
     #analyze_dendritic_spikes_multiple_trials(simDir, netDir)
     
     #plot_average_trace(822, 50, simDir) # 822, 1443
     
+    
+    plot_input_times_low_in_degree("/home/eugene/Programming/data/mlong/integrationConst/gee0.032/poly3/RA_RA_connections.bin", "/home/eugene/Programming/data/mlong/integrationConst/gee0.032/poly3/test/testTrial_0_somaSpikes.bin")
     #plot_input_times("/home/eugene/Programming/data/mlong/randomFeedforward/poly/f0.65/RA_RA_connections.bin", "/home/eugene/Programming/data/mlong/randomFeedforward/poly/f0.65/test/testTrial_0_somaSpikes.bin")
     #plot_input_times("/home/eugene/Programming/data/mlong/randomFeedforward/poly/network/new/RA_RA_connections.bin", "/home/eugene/Programming/data/mlong/randomFeedforward/poly/network/new/test/testTrial_0_somaSpikes.bin")
     #file_order = "/home/eugene/Programming/data/mlong/noise/052519/noise_s0.0_d0.0/testTrial_0_somaSpikes.bin"
@@ -779,9 +893,19 @@ if __name__ == "__main__":
     #plot_spikes(300.0, "/home/eugene/Programming/data/mlong/noise/052519/noise_s0.0_d0.0/testTrial_0_somaSpikes.bin")
     #plot_spikes(20.0, "/home/eugene/Programming/data/mlong/noise/052519/noise_s0.20_d0.0/testTrial_0_dendSpikes.bin")
     
-    plot_burst_onset_density("/home/eugene/Programming/data/mlong/integrationConst/poly15/e0.004000_i0.000000_somaSpikes.bin")
+    #plot_burst_onset_density("/home/eugene/Programming/data/mlong/integrationConst/poly15/e0.004000_i0.000000_somaSpikes.bin")
+    
+    #plot_integration_times_grid_results()
+    #plot_scaled_weights_results()
+    
+    #plot_burst_onset_density("/home/eugene/Programming/data/mlong/integrationConst/gee0.032/poly2/e0.032000_i0.000000_somaSpikes.bin", end=2000)
+    #plot_burst_onset_density("/home/eugene/Programming/data/mlong/integrationConst/grid/grid10_seed7777/test/testTrial_0_somaSpikes.bin", end=2000)
+    
+    
     #plot_burst_onset_density("/home/eugene/Programming/data/mlong/randomFeedforward/poly/f0.05/test/testTrial_0_somaSpikes.bin")
     #plot_burst_onset_density("/home/eugene/Programming/data/mlong/randomFeedforward/poly/network/new/test/testTrial_0_somaSpikes.bin")
+    
+    #plot_spikes(200.0, "/home/eugene/Programming/data/mlong/integrationConst/grid/grid5_seed1991/testTracesScale6.0/testTrial_0_somaSpikes.bin")
     
     #plot_spikes(300.0, "/home/eugene/Programming/data/mlong/randomFeedforward/poly/f0.05/test/testTrial_0_somaSpikes.bin")
     #plot_burst_onset_density("/home/eugene/Programming/data/mlong/randomFeedforward/poly/f0.05/test/testTrial_0_somaSpikes.bin")
@@ -792,6 +916,7 @@ if __name__ == "__main__":
     #print spike_times_raw[1]
     #print neuron_fired[1]
 
+    #plot_integration_times_grid_results()
     
     #time, average_burst_density = calculate_average_burst_onset_density(simDir, netDir)
     #plt.figure()

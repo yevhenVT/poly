@@ -60,8 +60,8 @@ def call_noise_dend_capacitance_batch_model(c, outDir):
     Simulate response of a neuron with different dendritic capacitance to a noise stimulus sampled
     based on dendritic capacitance
     """
-    CM_DEND = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
-    STD_DEND = [0.198, 0.233, 0.263, 0.29, 0.315, 0.34, 0.36]
+    CM_DEND = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0]
+    STD_DEND = [0.163, 0.198, 0.233, 0.263, 0.29, 0.315, 0.34, 0.36, 0.40, 0.42, 0.44, 0.46, 0.478, 0.495, 0.513, 0.53, 0.546, 0.562, 0.577, 0.592]
     
     STD_SOMA_CONST = 0.1
     MU_SOMA_CONST = 0.0
@@ -100,11 +100,11 @@ def call_noise_dend_capacitance_batch_model(c, outDir):
     
     
 if __name__ == "__main__":
-    outDir = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/sm8.0/"
+    #outDir = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/gee0.032/sm1.0/"
 
-    cm = np.arange(0.5, 10.1, 0.1)
-    print cm
-    call_input_response_batch(cm, outDir)
+    #cm = np.arange(0.5, 10.1, 0.5)
+    #print cm
+    #call_input_response_batch(cm, outDir)
     
     #c = 0.4
     #filename = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/integrationTime/smallCmSmallA/cm0.4_dt0.01.bin"
@@ -119,15 +119,19 @@ if __name__ == "__main__":
 
     #call_noise_dend_capacitance(mu_s, std_s, mu_d, std_d, outDir)
     
-    #filename = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/cm1.0/noise_s0.1_d0.198.bin"
+    #filename = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/findNoiseForSameStdV/cm10.0/noise_s0.1_d0.592.bin"
 
-    #c = 1.0
+    #c = 10.0
     #mu_s = 0.0
     #std_s = 0.1
     #mu_d = 0.0
-    #std_d = 0.198
+    #std_d = 0.592
 
     #call_noise_dend_capacitance(c, mu_s, std_s, mu_d, std_d, filename)
+    
+    #from analyze_input_response import estimate_noise
+    
+    #estimate_noise(filename)
     
     #outDir = "/home/eugene/Programming/data/mlong/integrationConst/tuneNeuron/same_noise/"
     #c = np.arange(1.0, 4.25, 0.25)

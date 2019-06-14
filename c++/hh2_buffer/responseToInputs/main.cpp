@@ -240,8 +240,8 @@ int main(int argc, char** argv){
 	
 	
 	int num_inputs = 170; // number of excitatory inputs
-	double gee_max = 0.004; // max strenght of excitatory input in mS/cm^2
-	double synch_window = 8.0; // time window for input arrivals in ms
+	double gee_max = 0.032; // max strenght of excitatory input in mS/cm^2
+	double synch_window = 1.0; // time window for input arrivals in ms
 	
 	int num_trial = 50; // number of trials to repeat
 	

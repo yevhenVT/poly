@@ -14,7 +14,7 @@ int main(int argc, char** argv)
 	double duration = 100000.0;
 
 	//double timestep = 0.001;
-	double timestep = 0.02;
+	double timestep = 0.01;
 	
 	double cm_d = 1.0; // membrane capacitance of dendritic compartment
 	std::string filename = ""; // path to output file

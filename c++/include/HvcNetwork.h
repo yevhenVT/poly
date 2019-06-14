@@ -56,6 +56,8 @@ public:
 	void test_network(int num_trials, double trial_duration, double spread, bool record, std::string outputDirectory, std::string fileSimName); // run multiple simulation of network dynamics
 	
 	void read_capacitance(const char* file_capcitance, const char* file_noise); // read dendritic capacitance from file_capacitance and write neuronal noise to file_noise	
+	
+	void scale_weights(double scale); // scale all excitatory weights by a const
 private:
 	/////////////////
 	// HVC parameters

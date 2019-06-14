@@ -13,4 +13,5 @@ mpirun -np 40 ./createNetwork -o /home/eugene/Programming/data/mlong/integration
 
 
 # in terms of integration time distribution
-mpirun -np 40 ./createNetwork -o /home/eugene/Programming/data/mlong/integrationConst/poly13/ -nra 20000 -nout 170 -maxnin 180 -gee 0.004 -sm 6.0 -int_min 4.0 -int_max 20.0 -int_mean 5.5 -int_std 2.0 --integration_times_lognormal
+mpirun -np 40 ./createNetwork -o /home/eugene/Programming/data/mlong/integrationConst/gee0.032/poly1/ -nra 20000 -nout 170 -maxnin 180 -gee 0.032 -sm 1.0 -int_min 2.6 -int_max 6.0 -int_mean 3.5 -int_std 1.0 -seed 1991 --integration_times_lognormal
+mpirun -np 40 ./createNetwork -o /home/eugene/Programming/data/mlong/integrationConst/gee0.032/poly4/ -nra 20000 -nout 170 -maxnin 180 -gee 0.032 -sm 3.0 -int_min 2.6 -int_max 6.0 -int_mean 4.0 -int_std 1.0 -seed 1991 --integration_times_lognormal
