@@ -118,7 +118,7 @@ static int parse_command_line(int argc, char** argv, int rank, bool& resample, b
 			}
 		}
 		char* endptr;
-		if (cmdOptionExist(argv+1, argv+argc, "-seed")) seed = strtoul(cmdOptionParser(argv+1, argv+argc, "-o"), &endptr, 10);
+		if (cmdOptionExist(argv+1, argv+argc, "-seed")) seed = strtoul(cmdOptionParser(argv+1, argv+argc, "-seed"), &endptr, 10);
         
 		if (cmdOptionExist(argv+1, argv+argc, "--help")) {if (rank == 0) print_usage();};
     }
